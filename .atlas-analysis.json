@@ -1,0 +1,121 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Alpamayo 1",
+  "projectDescription": "Vision-language-action reasoning model for generalizable autonomous driving with Chain-of-Causation reasoning",
+  "theme": "aspen",
+  "primaryColor": "#76B900",
+  "lightColor": "#A8D96E",
+  "darkColor": "#5A9100",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/chain-of-causation",
+              "concepts/trajectory-prediction",
+              "concepts/inputs-outputs"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/inference",
+              "guides/notebook-tutorial",
+              "guides/troubleshooting"
+            ]
+          },
+          {
+            "group": "Model Components",
+            "pages": [
+              "components/action-space",
+              "components/diffusion",
+              "components/geometry"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Models",
+            "pages": [
+              "api/alpamayo-r1",
+              "api/base-model",
+              "api/config"
+            ]
+          },
+          {
+            "group": "Action Space",
+            "pages": [
+              "api/action-space",
+              "api/discrete-action-space",
+              "api/unicycle-accel-curvature"
+            ]
+          },
+          {
+            "group": "Diffusion",
+            "pages": [
+              "api/diffusion-base",
+              "api/flow-matching"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/helper",
+              "api/data-loader"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Resources",
+        "groups": [
+          {
+            "group": "Additional Information",
+            "pages": [
+              "resources/faq",
+              "resources/contributing",
+              "resources/license"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Chain-of-Causation (CoC) reasoning for autonomous driving scenarios",
+    "Vision-Language-Action architecture with 10B parameter model",
+    "6.4-second trajectory prediction with 64 waypoints at 10 Hz",
+    "Multi-camera video and egomotion history processing",
+    "Flow matching diffusion for trajectory sampling",
+    "Integration with NVIDIA PhysicalAI-AV Dataset"
+  ],
+  "publicApiSurface": [
+    "AlpamayoR1.from_pretrained()",
+    "AlpamayoR1.sample_trajectories_from_data_with_vlm_rollout()",
+    "AlpamayoR1Config",
+    "load_physical_aiavdataset()",
+    "ActionSpace",
+    "DiscreteActionSpace",
+    "UnicycleAccelCurvature",
+    "BaseDiffusion",
+    "FlowMatchingDiffusion",
+    "helper.create_message()",
+    "helper.get_processor()",
+    "helper.to_device()"
+  ]
+}
