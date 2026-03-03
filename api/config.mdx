@@ -75,14 +75,16 @@ config = AlpamayoR1Config(
     
     # AlpamayoR1-specific configuration
     diffusion_cfg={
-        "_target_": "alpamayo_r1.diffusion.FlowMatchingDiffusion",
-        "num_steps": 10,
+        "_target_": "alpamayo_r1.diffusion.FlowMatching",
+        "num_inference_steps": 10,
     },
     action_space_cfg={
-        "_target_": "alpamayo_r1.action_space.TrajectoryActionSpace",
+        "_target_": "alpamayo_r1.action_space.UnicycleAccelCurvatureActionSpace",
     },
     action_in_proj_cfg={
-        "_target_": "alpamayo_r1.models.projections.MLPProjection",
+        "_target_": "alpamayo_r1.models.action_in_proj.PerWaypointActionInProjV2",
+        "num_enc_layers": 4,
+        "hidden_size": 1024,
     },
     action_out_proj_cfg={
         "_target_": "torch.nn.Linear",
