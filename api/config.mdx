@@ -1,0 +1,236 @@
+---
+title: Configuration Classes
+description: Configuration classes for Alpamayo R1 models
+---
+
+## AlpamayoR1Config
+
+Configuration class for the AlpamayoR1 expert model.
+
+**Inherits from:** `ReasoningVLAConfig`
+
+**Location:** `alpamayo_r1.config.AlpamayoR1Config`
+
+### Constructor
+
+```python
+AlpamayoR1Config(
+    diffusion_cfg: dict[str, Any] | None = None,
+    action_space_cfg: dict[str, Any] | None = None,
+    action_in_proj_cfg: dict[str, Any] | None = None,
+    action_out_proj_cfg: dict[str, Any] | None = None,
+    expert_cfg: dict[str, Any] | None = None,
+    keep_same_dtype: bool = True,
+    expert_non_causal_attention: bool = True,
+    **kwargs: Any,
+)
+```
+
+Initializes configuration for the AlpamayoR1 model.
+
+<ParamField path="diffusion_cfg" type="dict[str, Any] | None" default="None">
+  Configuration dictionary for the diffusion model. Used to instantiate the diffusion sampling process via Hydra.
+</ParamField>
+
+<ParamField path="action_space_cfg" type="dict[str, Any] | None" default="None">
+  Configuration dictionary for the action space. Defines how trajectories are encoded/decoded.
+</ParamField>
+
+<ParamField path="action_in_proj_cfg" type="dict[str, Any] | None" default="None">
+  Configuration dictionary for the action input projection layer. Maps noisy actions to expert token embeddings.
+</ParamField>
+
+<ParamField path="action_out_proj_cfg" type="dict[str, Any] | None" default="None">
+  Configuration dictionary for the action output projection layer. Maps expert hidden states to action predictions.
+</ParamField>
+
+<ParamField path="expert_cfg" type="dict[str, Any] | None" default="None">
+  Configuration dictionary for the expert language model. Overrides default settings from the VLM's text config.
+</ParamField>
+
+<ParamField path="keep_same_dtype" type="bool" default="True">
+  Whether to convert action-related modules (diffusion, projections) to the same dtype as the expert model.
+</ParamField>
+
+<ParamField path="expert_non_causal_attention" type="bool" default="True">
+  Whether to use non-causal attention in the expert model during trajectory generation.
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Additional keyword arguments passed to the parent `ReasoningVLAConfig` class. See ReasoningVLAConfig for inherited parameters.
+</ParamField>
+
+### Example Usage
+
+```python
+from alpamayo_r1.config import AlpamayoR1Config
+
+config = AlpamayoR1Config(
+    # Base VLA configuration
+    vlm_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+    traj_vocab_size=768,
+    tokens_per_history_traj=16,
+    tokens_per_future_traj=64,
+    model_dtype="bfloat16",
+    
+    # AlpamayoR1-specific configuration
+    diffusion_cfg={
+        "_target_": "alpamayo_r1.diffusion.FlowMatchingDiffusion",
+        "num_steps": 10,
+    },
+    action_space_cfg={
+        "_target_": "alpamayo_r1.action_space.TrajectoryActionSpace",
+    },
+    action_in_proj_cfg={
+        "_target_": "alpamayo_r1.models.projections.MLPProjection",
+    },
+    action_out_proj_cfg={
+        "_target_": "torch.nn.Linear",
+    },
+    expert_cfg={
+        "num_hidden_layers": 32,
+    },
+    keep_same_dtype=True,
+    expert_non_causal_attention=True,
+)
+```
+
+---
+
+## ReasoningVLAConfig
+
+Base configuration class for Reasoning VLA models.
+
+**Inherits from:** `PretrainedConfig`
+
+**Location:** `alpamayo_r1.models.base_model.ReasoningVLAConfig`
+
+### Constructor
+
+```python
+ReasoningVLAConfig(
+    vlm_name_or_path: str = "Qwen/Qwen3-VL-8B-Instruct",
+    vlm_backend: str = "qwenvl3",
+    traj_tokenizer_cfg: dict[str, Any] | None = None,
+    hist_traj_tokenizer_cfg: dict[str, Any] | None = None,
+    traj_vocab_size: int = 768,
+    tokens_per_history_traj: int = 16,
+    tokens_per_future_traj: int = 64,
+    model_dtype: str = "bfloat16",
+    attn_implementation: str = "flash_attention_2",
+    min_pixels: int | None = None,
+    max_pixels: int | None = None,
+    add_special_tokens: bool = False,
+    **kwargs: Any,
+)
+```
+
+Initializes base configuration for ReasoningVLA models.
+
+<ParamField path="vlm_name_or_path" type="str" default="'Qwen/Qwen3-VL-8B-Instruct'">
+  HuggingFace model identifier or local path to the pretrained vision-language model.
+</ParamField>
+
+<ParamField path="vlm_backend" type="str" default="'qwenvl3'">
+  VLM backend type. Currently supports `"qwenvl3"` for Qwen3-VL models.
+</ParamField>
+
+<ParamField path="traj_tokenizer_cfg" type="dict[str, Any] | None" default="None">
+  Configuration dictionary for the trajectory tokenizer (for future trajectories). Used with Hydra instantiation.
+</ParamField>
+
+<ParamField path="hist_traj_tokenizer_cfg" type="dict[str, Any] | None" default="None">
+  Configuration dictionary for the history trajectory tokenizer. If not provided, uses `traj_tokenizer_cfg`.
+</ParamField>
+
+<ParamField path="traj_vocab_size" type="int" default="768">
+  Vocabulary size for discrete trajectory tokens. Determines the number of trajectory tokens `<i0>` through `<i{vocab_size-1}>` to add.
+</ParamField>
+
+<ParamField path="tokens_per_history_traj" type="int" default="16">
+  Number of tokens used to encode each history trajectory.
+</ParamField>
+
+<ParamField path="tokens_per_future_traj" type="int" default="64">
+  Number of tokens used to encode each future trajectory.
+</ParamField>
+
+<ParamField path="model_dtype" type="str" default="'bfloat16'">
+  Data type for model weights. Supported values: `"float32"`, `"float16"`, `"bfloat16"`.
+</ParamField>
+
+<ParamField path="attn_implementation" type="str" default="'flash_attention_2'">
+  Attention implementation to use. Options include `"flash_attention_2"`, `"sdpa"`, or `"eager"`.
+</ParamField>
+
+<ParamField path="min_pixels" type="int | None" default="None">
+  Minimum number of pixels for image processing. Passed to the VLM processor.
+</ParamField>
+
+<ParamField path="max_pixels" type="int | None" default="None">
+  Maximum number of pixels for image processing. Passed to the VLM processor.
+</ParamField>
+
+<ParamField path="add_special_tokens" type="bool" default="False">
+  Whether to add extended special tokens beyond basic trajectory tokens. Includes tokens for chain-of-thought, meta-actions, etc.
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Additional keyword arguments passed to the parent `PretrainedConfig` class.
+</ParamField>
+
+### Attributes
+
+After initialization, the config object has these computed attributes:
+
+<ParamField path="vocab_size" type="int">
+  Total vocabulary size including original tokens and added trajectory tokens.
+</ParamField>
+
+<ParamField path="traj_token_start_idx" type="int">
+  Starting token ID for trajectory tokens in the vocabulary.
+</ParamField>
+
+<ParamField path="traj_token_ids" type="dict[str, int]">
+  Mapping of trajectory token names to their token IDs:
+  - `"history"`: History trajectory placeholder token ID
+  - `"future"`: Future trajectory placeholder token ID
+  - `"history_start"`: History start marker token ID
+  - `"history_end"`: History end marker token ID
+  - `"future_start"`: Future start marker token ID
+  - `"future_end"`: Future end marker token ID
+</ParamField>
+
+### Example Usage
+
+```python
+from alpamayo_r1.models.base_model import ReasoningVLAConfig
+
+config = ReasoningVLAConfig(
+    vlm_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+    vlm_backend="qwenvl3",
+    traj_vocab_size=768,
+    tokens_per_history_traj=16,
+    tokens_per_future_traj=64,
+    model_dtype="bfloat16",
+    attn_implementation="flash_attention_2",
+    min_pixels=256 * 28 * 28,
+    max_pixels=1280 * 28 * 28,
+    add_special_tokens=True,
+    traj_tokenizer_cfg={
+        "_target_": "alpamayo_r1.trajectory_tokenizer.VQTrajectoryTokenizer",
+        "load_weights": True,
+    },
+)
+
+print(f"Total vocab size: {config.vocab_size}")
+print(f"Trajectory token start index: {config.traj_token_start_idx}")
+print(f"Trajectory token IDs: {config.traj_token_ids}")
+```
+
+### Notes
+
+- The configuration automatically initializes by loading the processor from the specified VLM path
+- Trajectory tokens are added to the tokenizer during config initialization
+- The `vocab_size` includes both the original VLM vocabulary and added trajectory tokens
+- Configuration can be saved and loaded using standard HuggingFace `PretrainedConfig` methods

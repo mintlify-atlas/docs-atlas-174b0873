@@ -1,0 +1,545 @@
+---
+title: Input & Output Specifications
+description: Detailed format specifications for Alpamayo 1 model inputs and outputs
+---
+
+This page provides comprehensive specifications for Alpamayo 1's input and output formats, including tensor shapes, data types, coordinate systems, and example usage.
+
+## Model Inputs
+
+Alpamayo 1 requires two primary types of inputs: **multi-camera video frames** and **egomotion history**.
+
+### Multi-Camera Video
+
+Alpamayo 1 processes video from multiple camera viewpoints to build a comprehensive understanding of the driving scene.
+
+#### Image Format
+
+```python
+# From alpamayo_r1/test_inference.py:30-36
+data = load_physical_aiavdataset(clip_id, t0_us=5_100_000)
+messages = helper.create_message(data["image_frames"].flatten(0, 1))
+
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+)
+```
+
+**Expected format**:
+- **Type**: RGB images
+- **Channels**: 3 (RGB)
+- **Preprocessing**: Handled by `AutoProcessor` from Qwen3-VL
+- **Resolution**: Variable (controlled by `min_pixels` and `max_pixels` config)
+- **Cameras**: Multiple viewpoints (e.g., front, left, right, rear)
+
+<Info>
+  The Qwen3-VL processor automatically handles image resizing, normalization, and patch tokenization. You don't need to manually preprocess images.
+</Info>
+
+#### Processor Configuration
+
+```python
+# From alpamayo_r1/models/base_model.py:251-259
+processor_kwargs = {}
+if self.min_pixels is not None:
+    processor_kwargs["min_pixels"] = self.min_pixels
+if self.max_pixels is not None:
+    processor_kwargs["max_pixels"] = self.max_pixels
+
+processor = AutoProcessor.from_pretrained(
+    self.vlm_name_or_path, **processor_kwargs
+)
+```
+
+**Resolution parameters**:
+- `min_pixels`: Minimum image resolution (default: depends on Qwen3-VL config)
+- `max_pixels`: Maximum image resolution (default: depends on Qwen3-VL config)
+- Higher resolutions provide more detail but increase memory usage
+
+### Egomotion History
+
+Egomotion history provides the vehicle's past trajectory, enabling the model to infer current velocity and predict smooth future motion.
+
+#### History XYZ Positions
+
+```python
+ego_history_xyz: torch.Tensor
+```
+
+**Shape**: `(batch_size, num_trajectories, history_length, 3)`
+
+**Typical values**:
+- `batch_size`: Usually 1 for inference
+- `num_trajectories`: 1 (single ego vehicle)
+- `history_length`: Variable (e.g., 20 timesteps = 2 seconds at 10 Hz)
+- `3`: (x, y, z) coordinates in meters
+
+**Coordinate frame**:
+- **Ego-centric**: Last history position (t=0) should be at origin `(0, 0, 0)`
+- **X-axis**: Forward
+- **Y-axis**: Left
+- **Z-axis**: Up
+
+<Tip>
+  The last history waypoint `ego_history_xyz[..., -1, :]` represents the current position and should be `[0, 0, 0]` in the ego frame.
+</Tip>
+
+#### History Rotations
+
+```python
+ego_history_rot: torch.Tensor
+```
+
+**Shape**: `(batch_size, num_trajectories, history_length, 3, 3)`
+
+**Format**: SO(3) rotation matrices (not quaternions or Euler angles)
+
+**Typical values**:
+- Same batch dimensions as `ego_history_xyz`
+- `3 × 3`: Rotation matrix representing vehicle orientation
+
+**Orientation convention**:
+- Rotation from world frame to ego frame at each timestep
+- Last rotation `ego_history_rot[..., -1, :, :]` represents current heading
+
+```python
+# Example: Extract yaw from rotation matrix
+# From alpamayo_r1/action_space/unicycle_accel_curvature.py:215
+theta = so3_to_yaw_torch(traj_history_rot)
+```
+
+### Tokenized Input
+
+After processing images and creating chat messages, the input is tokenized:
+
+```python
+# From alpamayo_r1/test_inference.py:38-50
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    add_generation_prompt=False,
+    continue_final_message=True,
+    return_dict=True,
+    return_tensors="pt",
+)
+
+model_inputs = {
+    "tokenized_data": inputs,
+    "ego_history_xyz": data["ego_history_xyz"],
+    "ego_history_rot": data["ego_history_rot"],
+}
+```
+
+**Tokenized data contents**:
+- `input_ids`: Token IDs for images and text
+- `attention_mask`: Attention mask for padding
+- `pixel_values`: Processed image tensors (if applicable)
+- Additional processor-specific keys
+
+### Complete Input Example
+
+```python
+import torch
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1 import helper
+
+# Load model
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B", 
+    dtype=torch.bfloat16
+).to("cuda")
+
+processor = helper.get_processor(model.tokenizer)
+
+# Prepare inputs
+image_frames = ...  # Your multi-camera images
+ego_history_xyz = torch.zeros(1, 1, 20, 3)  # Example: 2s history
+ego_history_rot = torch.eye(3).unsqueeze(0).unsqueeze(0).unsqueeze(0).repeat(
+    1, 1, 20, 1, 1
+)  # Example: no rotation
+
+messages = helper.create_message(image_frames)
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+)
+
+model_inputs = {
+    "tokenized_data": inputs,
+    "ego_history_xyz": ego_history_xyz.to("cuda"),
+    "ego_history_rot": ego_history_rot.to("cuda"),
+}
+```
+
+## Model Outputs
+
+Alpamayo 1 produces three types of outputs: **trajectory predictions**, **rotation predictions**, and **Chain-of-Causation reasoning traces**.
+
+### Trajectory Predictions (XYZ)
+
+```python
+pred_xyz: torch.Tensor
+```
+
+**Shape**: `(batch_size, num_traj_sets, num_traj_samples, num_waypoints, 3)`
+
+**Example shape**: `(1, 1, 6, 64, 3)` for 6 samples
+
+**Dimensions**:
+- `batch_size`: Number of input scenes (typically 1)
+- `num_traj_sets`: Number of independent sampling runs (typically 1)
+- `num_traj_samples`: Number of trajectory samples per input (e.g., 1-10)
+- `num_waypoints`: 64 (fixed at 10 Hz for 6.4 seconds)
+- `3`: (x, y, z) coordinates in meters
+
+**Coordinate system**:
+- **Origin**: Current ego position (last history waypoint)
+- **Frame**: Ego-centric (not world coordinates)
+- **X-axis**: Forward direction
+- **Y-axis**: Left direction
+- **Z-axis**: Up direction (often constant for ground vehicles)
+
+```python
+# From alpamayo_r1/test_inference.py:68-69
+gt_xy = data["ego_future_xyz"].cpu()[0, 0, :, :2].T.numpy()
+pred_xy = pred_xyz.cpu().numpy()[0, 0, :, :, :2].transpose(0, 2, 1)
+```
+
+<Warning>
+  **Important**: Trajectories are in the **ego frame** at the current timestep, not world coordinates. You must transform predictions to world coordinates using the ego vehicle's current pose.
+</Warning>
+
+### Rotation Predictions (SO(3))
+
+```python
+pred_rot: torch.Tensor
+```
+
+**Shape**: `(batch_size, num_traj_sets, num_traj_samples, num_waypoints, 3, 3)`
+
+**Example shape**: `(1, 1, 6, 64, 3, 3)` for 6 samples
+
+**Format**: SO(3) rotation matrices
+- Each `3×3` matrix is orthogonal with determinant +1
+- Represents vehicle heading at each waypoint
+- **Not** quaternions or Euler angles
+
+**Coordinate convention**:
+- Rotation from ego frame to waypoint frame
+- Consistent with `ego_history_rot` format
+
+```python
+# Convert to yaw angle if needed
+from alpamayo_r1.geometry.rotation import so3_to_yaw_torch
+
+yaw_angles = so3_to_yaw_torch(pred_rot)  # Extract heading angles
+```
+
+### Chain-of-Causation Reasoning
+
+```python
+extra: dict[str, np.ndarray]
+```
+
+**Returned when** `return_extra=True` in the inference call.
+
+**Contents**:
+```python
+extra = {
+    "cot": np.ndarray,  # Chain-of-Causation traces
+    # Additional keys for other extracted tokens
+}
+```
+
+**Shape**: `extra["cot"]` has shape `(batch_size, num_traj_sets, num_traj_samples)`
+
+**Type**: Each element is a **string** containing the reasoning trace
+
+```python
+# From alpamayo_r1/test_inference.py:66
+print("Chain-of-Causation (per trajectory):\n", extra["cot"][0])
+```
+
+**Example output**:
+```
+[
+  [
+    [
+      "The vehicle ahead is braking, indicated by brake lights. "
+      "There is a pedestrian on the right sidewalk approaching the crosswalk. "
+      "The ego vehicle should decelerate smoothly to maintain safe following distance "
+      "and prepare to stop if the pedestrian enters the crosswalk."
+    ]
+  ]
+]
+```
+
+<Info>
+  Each trajectory sample gets its own CoC trace when `num_traj_samples > 1` due to stochastic generation.
+</Info>
+
+### Return Value Formats
+
+The main inference method returns different outputs based on `return_extra`:
+
+```python
+# From alpamayo_r1/models/alpamayo_r1.py:122-328
+def sample_trajectories_from_data_with_vlm_rollout(
+    self,
+    data: dict[str, Any],
+    top_p: float = 0.98,
+    top_k: int | None = None,
+    temperature: float = 0.6,
+    num_traj_samples: int = 6,
+    num_traj_sets: int = 1,
+    diffusion_kwargs: dict[str, Any] | None = None,
+    *args: Any,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+```
+
+**Return types**:
+
+**Without extra** (`return_extra=False`, default):
+```python
+pred_xyz, pred_rot = model.sample_trajectories_from_data_with_vlm_rollout(
+    data=model_inputs,
+    return_extra=False,
+)
+# Returns: (torch.Tensor, torch.Tensor)
+```
+
+**With extra** (`return_extra=True`):
+```python
+pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+    data=model_inputs,
+    return_extra=True,
+)
+# Returns: (torch.Tensor, torch.Tensor, dict)
+```
+
+## Data Types & Precision
+
+### Input Data Types
+
+```python
+# Recommended configuration
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B",
+    dtype=torch.bfloat16,  # Memory-efficient 16-bit precision
+).to("cuda")
+
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=model_inputs,
+        # ...
+    )
+```
+
+**Supported dtypes**:
+- `torch.bfloat16`: Recommended (24 GB VRAM)
+- `torch.float16`: Alternative (may have numerical issues)
+- `torch.float32`: Full precision (requires >40 GB VRAM)
+
+### Output Data Types
+
+Outputs match the model's dtype:
+```python
+print(pred_xyz.dtype)  # torch.bfloat16 (if model is bfloat16)
+print(pred_rot.dtype)  # torch.bfloat16
+```
+
+Convert to float32 for downstream processing if needed:
+```python
+pred_xyz_fp32 = pred_xyz.float()  # torch.float32
+```
+
+## Temporal Specifications
+
+### Timestep Information
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| **Frequency** | 10 Hz | Waypoints sampled every 0.1 seconds |
+| **Waypoints** | 64 | Fixed number |
+| **Horizon** | 6.4 seconds | Total prediction duration |
+| **Time interval** | `dt = 0.1` | Defined in action space config |
+
+**Waypoint timestamps**:
+```python
+import numpy as np
+
+timestamps = np.arange(1, 65) * 0.1  # [0.1, 0.2, ..., 6.4] seconds
+# Note: First waypoint is 0.1s in the future, not current time
+```
+
+### History vs. Future
+
+```
+History              Current    Future Prediction
+<------------------->|<-------------------------->
+  t=-2s  ...  t=0s   |  t=0.1s  ...  t=6.4s
+                     ^
+                     Origin for predictions
+```
+
+- **History length**: Variable (e.g., 20 timesteps = 2 seconds)
+- **Current time**: t=0, origin of prediction frame
+- **Future horizon**: 64 timesteps = 6.4 seconds
+
+## Complete Usage Example
+
+```python
+import torch
+import numpy as np
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+from alpamayo_r1 import helper
+
+# Load data
+clip_id = "030c760c-ae38-49aa-9ad8-f5650a545d26"
+data = load_physical_aiavdataset(clip_id, t0_us=5_100_000)
+
+# Load model
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B", 
+    dtype=torch.bfloat16
+).to("cuda")
+
+processor = helper.get_processor(model.tokenizer)
+
+# Prepare inputs
+messages = helper.create_message(data["image_frames"].flatten(0, 1))
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+)
+
+model_inputs = {
+    "tokenized_data": inputs,
+    "ego_history_xyz": data["ego_history_xyz"].to("cuda"),
+    "ego_history_rot": data["ego_history_rot"].to("cuda"),
+}
+
+# Run inference
+torch.cuda.manual_seed_all(42)
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=model_inputs,
+        top_p=0.98,
+        temperature=0.6,
+        num_traj_samples=6,
+        max_generation_length=256,
+        return_extra=True,
+    )
+
+# Print output shapes
+print(f"Predicted XYZ shape: {pred_xyz.shape}")  # (1, 1, 6, 64, 3)
+print(f"Predicted rotations shape: {pred_rot.shape}")  # (1, 1, 6, 64, 3, 3)
+print(f"CoC shape: {extra['cot'].shape}")  # (1, 1, 6)
+
+# Access individual samples
+batch_idx = 0
+set_idx = 0
+
+for sample_idx in range(6):
+    trajectory = pred_xyz[batch_idx, set_idx, sample_idx]  # (64, 3)
+    reasoning = extra["cot"][batch_idx, set_idx, sample_idx]  # str
+    
+    print(f"\nSample {sample_idx}:")
+    print(f"First waypoint (t=0.1s): {trajectory[0]}")
+    print(f"Last waypoint (t=6.4s): {trajectory[-1]}")
+    print(f"Reasoning: {reasoning[:100]}...")  # First 100 chars
+
+# Evaluate minADE
+gt_xy = data["ego_future_xyz"].cpu()[0, 0, :, :2].T.numpy()
+pred_xy = pred_xyz.cpu().numpy()[0, 0, :, :, :2].transpose(0, 2, 1)
+diff = np.linalg.norm(pred_xy - gt_xy[None, ...], axis=1).mean(-1)
+min_ade = diff.min()
+print(f"\nMinimum ADE: {min_ade:.3f} meters")
+```
+
+## Input Validation
+
+Common issues and how to avoid them:
+
+### Shape Mismatches
+
+<Warning>
+  **Error**: `ego_history_xyz` and `ego_history_rot` must have compatible shapes.
+  
+  ✅ Correct: Both have shape `(B, N, T, ...)`  
+  ❌ Wrong: Different batch sizes or trajectory counts
+</Warning>
+
+```python
+# Correct
+ego_history_xyz.shape  # (1, 1, 20, 3)
+ego_history_rot.shape  # (1, 1, 20, 3, 3)
+
+# Wrong - mismatched history length
+ego_history_xyz.shape  # (1, 1, 20, 3)
+ego_history_rot.shape  # (1, 1, 15, 3, 3)  # Error!
+```
+
+### Device Mismatches
+
+```python
+# Ensure all inputs are on the same device as the model
+model_inputs = helper.to_device(model_inputs, "cuda")
+```
+
+### Origin Convention
+
+<Tip>
+  The last history position should be at the origin `(0, 0, 0)` in the ego frame. If your data uses a different convention, transform it before passing to the model.
+</Tip>
+
+```python
+# Transform to ego frame
+ego_history_xyz_ego = ego_history_xyz - ego_history_xyz[:, :, -1:, :]
+# Now ego_history_xyz_ego[..., -1, :] == [0, 0, 0]
+```
+
+## Memory Requirements
+
+Input size affects memory usage:
+
+| Configuration | VRAM Usage | Notes |
+|--------------|------------|-------|
+| Base model (bfloat16) | ~20 GB | No inference |
+| + 1 sample inference | ~22 GB | Minimum configuration |
+| + 6 samples inference | ~24 GB | Typical multi-sample |
+| + 10 samples inference | ~26 GB | High coverage |
+| Higher image resolution | +2-4 GB | Depends on `max_pixels` |
+
+<Warning>
+  GPUs with less than 24 GB VRAM will likely encounter CUDA out-of-memory errors with multi-sample generation.
+</Warning>
+
+**Reducing memory usage**:
+1. Use `num_traj_samples=1`
+2. Lower `max_pixels` in processor config
+3. Process smaller batches
+4. Enable gradient checkpointing (training only)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand how inputs flow through the model
+  </Card>
+  <Card title="Trajectory Prediction" icon="route" href="/concepts/trajectory-prediction">
+    Learn how outputs are generated
+  </Card>
+  <Card title="Chain-of-Causation" icon="brain" href="/concepts/chain-of-causation">
+    Interpret reasoning outputs
+  </Card>
+</CardGroup>

@@ -1,0 +1,184 @@
+---
+title: DiscreteTrajectoryTokenizer
+description: Tokenizer for discretizing continuous trajectories into discrete tokens
+---
+
+`DiscreteTrajectoryTokenizer` converts continuous trajectory data into discrete tokens for use with discrete models, and decodes tokens back into trajectories.
+
+## Class Definition
+
+```python
+class DiscreteTrajectoryTokenizer
+```
+
+## Constructor
+
+```python
+def __init__(
+    self,
+    action_space_cfg: dict[str, Any],
+    dims_min: list[float],
+    dims_max: list[float],
+    num_bins: int,
+    **kwargs: Any,
+) -> None
+```
+
+<ParamField path="action_space_cfg" type="dict[str, Any]">
+  Configuration dictionary for instantiating the action space using Hydra
+</ParamField>
+
+<ParamField path="dims_min" type="list[float]">
+  Minimum values for each dimension in the action space. Must have length equal to the last dimension of the action space
+</ParamField>
+
+<ParamField path="dims_max" type="list[float]">
+  Maximum values for each dimension in the action space. Must have length equal to the last dimension of the action space
+</ParamField>
+
+<ParamField path="num_bins" type="int">
+  Number of discrete bins to use for quantization
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Additional keyword arguments (not used)
+</ParamField>
+
+## Properties
+
+### vocab_size
+
+Returns the vocabulary size (number of possible token values).
+
+```python
+@property
+def vocab_size(self) -> int
+```
+
+**Returns:** `int` - The number of bins, representing tokens from the set `{0, 1, ..., vocab_size - 1}`
+
+## Methods
+
+### encode
+
+Encodes trajectories as discrete tokens.
+
+```python
+def encode(
+    self,
+    hist_xyz: torch.Tensor,
+    hist_rot: torch.Tensor,
+    fut_xyz: torch.Tensor,
+    fut_rot: torch.Tensor,
+    hist_tstamp: torch.Tensor | None = None,
+    fut_tstamp: torch.Tensor | None = None,
+) -> torch.LongTensor
+```
+
+<ParamField path="hist_xyz" type="torch.Tensor">
+  The history xyz coordinates
+</ParamField>
+
+<ParamField path="hist_rot" type="torch.Tensor">
+  The history rotation matrices
+</ParamField>
+
+<ParamField path="fut_xyz" type="torch.Tensor">
+  The future xyz coordinates
+</ParamField>
+
+<ParamField path="fut_rot" type="torch.Tensor">
+  The future rotation matrices
+</ParamField>
+
+<ParamField path="hist_tstamp" type="torch.Tensor | None" default="None">
+  The history timestamps (currently unused)
+</ParamField>
+
+<ParamField path="fut_tstamp" type="torch.Tensor | None" default="None">
+  The future timestamps (assumed consistent with future trajectory)
+</ParamField>
+
+**Returns:** `torch.LongTensor` with shape `(B, num_tokens_per_trajectory)` containing the encoded tokens
+
+### decode
+
+Decodes discrete tokens into future trajectories.
+
+```python
+def decode(
+    self,
+    hist_xyz: torch.Tensor,
+    hist_rot: torch.Tensor,
+    tokens: torch.LongTensor,
+    hist_tstamp: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]
+```
+
+<ParamField path="hist_xyz" type="torch.Tensor">
+  The history xyz coordinates
+</ParamField>
+
+<ParamField path="hist_rot" type="torch.Tensor">
+  The history rotation matrices
+</ParamField>
+
+<ParamField path="tokens" type="torch.LongTensor">
+  The tokens to decode
+</ParamField>
+
+<ParamField path="hist_tstamp" type="torch.Tensor | None" default="None">
+  The history timestamps (currently unused)
+</ParamField>
+
+**Returns:** Tuple of `(fut_xyz, fut_rot, None)` where:
+- `fut_xyz` is the decoded future xyz coordinates
+- `fut_rot` is the decoded future rotation matrices
+- `None` indicates future timestamps are not decoded
+
+## Usage Example
+
+```python
+from alpamayo_r1.action_space import DiscreteTrajectoryTokenizer
+import torch
+
+# Configure action space
+action_space_cfg = {
+    "_target_": "alpamayo_r1.action_space.UnicycleAccelCurvatureActionSpace",
+    "dt": 0.1,
+    "n_waypoints": 64,
+}
+
+# Create tokenizer
+tokenizer = DiscreteTrajectoryTokenizer(
+    action_space_cfg=action_space_cfg,
+    dims_min=[-10.0, -0.5],  # Min acceleration and curvature
+    dims_max=[10.0, 0.5],     # Max acceleration and curvature
+    num_bins=256,
+)
+
+print(f"Vocabulary size: {tokenizer.vocab_size}")  # 256
+
+# Encode trajectories
+hist_xyz = torch.randn(32, 10, 3)  # Batch of 32, 10 history steps
+hist_rot = torch.eye(3).expand(32, 10, 3, 3)
+fut_xyz = torch.randn(32, 64, 3)   # 64 future waypoints
+fut_rot = torch.eye(3).expand(32, 64, 3, 3)
+
+tokens = tokenizer.encode(hist_xyz, hist_rot, fut_xyz, fut_rot)
+print(f"Tokens shape: {tokens.shape}")  # (32, num_tokens)
+
+# Decode tokens back to trajectories
+fut_xyz_decoded, fut_rot_decoded, _ = tokenizer.decode(
+    hist_xyz, hist_rot, tokens
+)
+print(f"Decoded trajectory shape: {fut_xyz_decoded.shape}")  # (32, 64, 3)
+```
+
+<Note>
+  The tokenizer quantizes continuous action space values into discrete bins. The encoding process:
+  1. Converts trajectories to actions using the action space
+  2. Normalizes actions to [0, 1] range using `dims_min` and `dims_max`
+  3. Quantizes to `num_bins` discrete values
+  4. Clamps values to valid range
+</Note>

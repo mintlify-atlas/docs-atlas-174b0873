@@ -1,0 +1,284 @@
+---
+title: UnicycleAccelCurvatureActionSpace
+description: Unicycle kinematic model with acceleration and curvature as control inputs
+---
+
+`UnicycleAccelCurvatureActionSpace` implements a unicycle kinematic model where the action space consists of acceleration and curvature values at each waypoint. This class converts between trajectories and (acceleration, curvature) pairs.
+
+## Class Definition
+
+```python
+class UnicycleAccelCurvatureActionSpace(ActionSpace)
+```
+
+Inherits from [`ActionSpace`](/api/action-space).
+
+## Constructor
+
+```python
+def __init__(
+    self,
+    accel_mean: float = 0.0,
+    accel_std: float = 1.0,
+    curvature_mean: float = 0.0,
+    curvature_std: float = 1.0,
+    accel_bounds: tuple[float, float] = (-9.8, 9.8),
+    curvature_bounds: tuple[float, float] = (-0.2, 0.2),
+    dt: float = 0.1,
+    n_waypoints: int = 64,
+    theta_lambda: float = 1e-6,
+    theta_ridge: float = 1e-8,
+    v_lambda: float = 1e-6,
+    v_ridge: float = 1e-4,
+    a_lambda: float = 1e-4,
+    a_ridge: float = 1e-4,
+    kappa_lambda: float = 1e-4,
+    kappa_ridge: float = 1e-4,
+)
+```
+
+<ParamField path="accel_mean" type="float" default="0.0">
+  Mean for normalizing acceleration
+</ParamField>
+
+<ParamField path="accel_std" type="float" default="1.0">
+  Standard deviation for normalizing acceleration
+</ParamField>
+
+<ParamField path="curvature_mean" type="float" default="0.0">
+  Mean for normalizing curvature
+</ParamField>
+
+<ParamField path="curvature_std" type="float" default="1.0">
+  Standard deviation for normalizing curvature
+</ParamField>
+
+<ParamField path="accel_bounds" type="tuple[float, float]" default="(-9.8, 9.8)">
+  Acceleration bounds (min, max) used to check if acceleration is within valid range
+</ParamField>
+
+<ParamField path="curvature_bounds" type="tuple[float, float]" default="(-0.2, 0.2)">
+  Curvature bounds (min, max) used to check if curvature is within valid range
+</ParamField>
+
+<ParamField path="dt" type="float" default="0.1">
+  Time step interval between waypoints in seconds
+</ParamField>
+
+<ParamField path="n_waypoints" type="int" default="64">
+  Number of waypoints in the trajectory
+</ParamField>
+
+<ParamField path="theta_lambda" type="float" default="1e-6">
+  Lambda parameter for theta smoothing regularization
+</ParamField>
+
+<ParamField path="theta_ridge" type="float" default="1e-8">
+  Ridge parameter for theta smoothing regularization
+</ParamField>
+
+<ParamField path="v_lambda" type="float" default="1e-6">
+  Lambda parameter for velocity smoothing regularization
+</ParamField>
+
+<ParamField path="v_ridge" type="float" default="1e-4">
+  Ridge parameter for velocity smoothing regularization
+</ParamField>
+
+<ParamField path="a_lambda" type="float" default="1e-4">
+  Lambda parameter for acceleration smoothing regularization
+</ParamField>
+
+<ParamField path="a_ridge" type="float" default="1e-4">
+  Ridge parameter for acceleration smoothing regularization
+</ParamField>
+
+<ParamField path="kappa_lambda" type="float" default="1e-4">
+  Lambda parameter for curvature smoothing regularization
+</ParamField>
+
+<ParamField path="kappa_ridge" type="float" default="1e-4">
+  Ridge parameter for curvature smoothing regularization
+</ParamField>
+
+## Methods
+
+### get_action_space_dims
+
+Returns the dimensions of the action space.
+
+```python
+def get_action_space_dims(self) -> tuple[int, int]
+```
+
+**Returns:** `tuple[int, int]` - Always returns `(n_waypoints, 2)` where 2 represents acceleration and curvature
+
+### is_within_bounds
+
+Checks if a normalized action is within the specified bounds.
+
+```python
+def is_within_bounds(self, action: torch.Tensor) -> torch.Tensor
+```
+
+<ParamField path="action" type="torch.Tensor">
+  Normalized action tensor with shape `(..., N, 2)` where the last dimension contains [acceleration, curvature]
+</ParamField>
+
+**Returns:** `torch.Tensor` with shape `(...)` containing boolean values indicating whether all waypoints in each action are within bounds
+
+### estimate_t0_states
+
+Estimates the initial state (velocity) at time t0 from trajectory history.
+
+```python
+def estimate_t0_states(
+    self,
+    traj_history_xyz: torch.Tensor,
+    traj_history_rot: torch.Tensor,
+) -> dict[str, torch.Tensor]
+```
+
+<ParamField path="traj_history_xyz" type="torch.Tensor">
+  Historical trajectory positions with shape `(..., N_hist, 3)`
+</ParamField>
+
+<ParamField path="traj_history_rot" type="torch.Tensor">
+  Historical trajectory rotations with shape `(..., N_hist, 3, 3)`
+</ParamField>
+
+**Returns:** `dict[str, torch.Tensor]` containing:
+- `"v"`: Initial velocity estimate at time t0
+
+### traj_to_action
+
+Transforms the future trajectory to the action space (acceleration and curvature).
+
+```python
+def traj_to_action(
+    self,
+    traj_history_xyz: torch.Tensor,
+    traj_history_rot: torch.Tensor,
+    traj_future_xyz: torch.Tensor,
+    traj_future_rot: torch.Tensor,
+    t0_states: dict[str, torch.Tensor] | None = None,
+    output_all_states: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+```
+
+<ParamField path="traj_history_xyz" type="torch.Tensor">
+  Historical trajectory positions with shape `(..., T, 3)`. The last position `traj_history_xyz[..., -1, :]` is assumed to be the current position at all zeros
+</ParamField>
+
+<ParamField path="traj_history_rot" type="torch.Tensor">
+  Historical trajectory rotations with shape `(..., T, 3, 3)`
+</ParamField>
+
+<ParamField path="traj_future_xyz" type="torch.Tensor">
+  Future trajectory positions with shape `(..., T, 3)`. Must have `T == n_waypoints`
+</ParamField>
+
+<ParamField path="traj_future_rot" type="torch.Tensor">
+  Future trajectory rotations with shape `(..., T, 3, 3)`
+</ParamField>
+
+<ParamField path="t0_states" type="dict[str, torch.Tensor] | None" default="None">
+  Initial state estimate containing `"v"` (velocity). If `None`, will be estimated from history
+</ParamField>
+
+<ParamField path="output_all_states" type="bool" default="False">
+  Whether to output all intermediate states (velocity, acceleration, theta) in addition to the action
+</ParamField>
+
+**Returns:**
+- If `output_all_states=False`: `torch.Tensor` with shape `(..., T, 2)` containing normalized [acceleration, curvature]
+- If `output_all_states=True`: Tuple of `(action, states)` where:
+  - `action` has shape `(..., T, 2)`
+  - `states` has shape `(..., T, 3)` containing [velocity, acceleration, theta]
+
+### action_to_traj
+
+Transforms the action space (acceleration and curvature) to trajectory representation.
+
+```python
+def action_to_traj(
+    self,
+    action: torch.Tensor,
+    traj_history_xyz: torch.Tensor,
+    traj_history_rot: torch.Tensor,
+    t0_states: dict[str, torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]
+```
+
+<ParamField path="action" type="torch.Tensor">
+  Normalized action tensor with shape `(..., T, 2)` containing [acceleration, curvature]
+</ParamField>
+
+<ParamField path="traj_history_xyz" type="torch.Tensor">
+  Historical trajectory positions with shape `(..., T, 3)`
+</ParamField>
+
+<ParamField path="traj_history_rot" type="torch.Tensor">
+  Historical trajectory rotations with shape `(..., T, 3, 3)`
+</ParamField>
+
+<ParamField path="t0_states" type="dict[str, torch.Tensor] | None" default="None">
+  Initial state estimate containing `"v"` (velocity). If `None`, will be estimated from history
+</ParamField>
+
+**Returns:** Tuple of `(traj_future_xyz, traj_future_rot)` where:
+- `traj_future_xyz` has shape `(..., T, 3)`
+- `traj_future_rot` has shape `(..., T, 3, 3)`
+
+## Usage Example
+
+```python
+from alpamayo_r1.action_space import UnicycleAccelCurvatureActionSpace
+import torch
+
+# Create action space
+action_space = UnicycleAccelCurvatureActionSpace(
+    dt=0.1,
+    n_waypoints=64,
+    accel_bounds=(-5.0, 5.0),
+    curvature_bounds=(-0.3, 0.3),
+)
+
+print(f"Action space dims: {action_space.get_action_space_dims()}")  # (64, 2)
+
+# Prepare trajectory data
+batch_size = 8
+hist_xyz = torch.randn(batch_size, 10, 3)  # 10 history steps
+hist_rot = torch.eye(3).expand(batch_size, 10, 3, 3)
+fut_xyz = torch.randn(batch_size, 64, 3)   # 64 future waypoints
+fut_rot = torch.eye(3).expand(batch_size, 64, 3, 3)
+
+# Convert trajectory to action
+action = action_space.traj_to_action(
+    traj_history_xyz=hist_xyz,
+    traj_history_rot=hist_rot,
+    traj_future_xyz=fut_xyz,
+    traj_future_rot=fut_rot,
+)
+print(f"Action shape: {action.shape}")  # (8, 64, 2)
+
+# Check if actions are valid
+valid = action_space.is_within_bounds(action)
+print(f"Valid actions: {valid.sum()}/{valid.numel()}") 
+
+# Convert action back to trajectory
+fut_xyz_recon, fut_rot_recon = action_space.action_to_traj(
+    action=action,
+    traj_history_xyz=hist_xyz,
+    traj_history_rot=hist_rot,
+)
+print(f"Reconstructed trajectory shape: {fut_xyz_recon.shape}")  # (8, 64, 3)
+```
+
+<Note>
+  The unicycle model assumes the current position at `traj_history_xyz[..., -1, :]` is at the origin (all zeros). Actions are normalized using the provided mean and standard deviation parameters.
+</Note>
+
+<Tip>
+  The lambda and ridge parameters control the smoothness of the trajectory-to-action conversion through Tikhonov regularization. Higher values produce smoother but potentially less accurate conversions.
+</Tip>

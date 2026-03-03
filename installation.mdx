@@ -1,0 +1,176 @@
+---
+title: Installation
+description: Install Alpamayo 1 and set up your environment for autonomous driving research
+---
+
+# Installation
+
+This guide walks you through setting up Alpamayo 1 on your system.
+
+## Requirements
+
+Before installing, verify that your system meets these requirements:
+
+| Requirement | Specification |
+|-------------|---------------|
+| **Python** | 3.12.x |
+| **GPU** | NVIDIA GPU with ≥24 GB VRAM (e.g., RTX 3090, RTX 4090, A5000, H100) |
+| **OS** | Linux (tested); other platforms unverified |
+| **VRAM** | Minimum 24 GB for inference |
+
+<Warning>
+  GPUs with less than 24 GB VRAM will encounter CUDA out-of-memory errors during inference. Ensure your GPU meets this requirement before proceeding.
+</Warning>
+
+## Installation steps
+
+<Steps>
+  <Step title="Install uv package manager">
+    Install the `uv` package manager if you don't already have it:
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    ```
+
+    The `uv` package manager provides fast, reliable dependency management for Python projects.
+  </Step>
+
+  <Step title="Set up the virtual environment">
+    Create and activate a virtual environment, then sync dependencies:
+
+    ```bash
+    uv venv ar1_venv
+    source ar1_venv/bin/activate
+    uv sync --active
+    ```
+
+    This will install all required dependencies from `pyproject.toml`, including:
+    - PyTorch 2.8.0
+    - Transformers 4.57.1
+    - Flash Attention 2.8.3+
+    - Accelerate, einops, and other core dependencies
+  </Step>
+
+  <Step title="Authenticate with HuggingFace">
+    Alpamayo 1 requires access to gated resources on HuggingFace. First, request access to:
+
+    - [Physical AI AV Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles)
+    - [Alpamayo Model Weights](https://huggingface.co/nvidia/Alpamayo-R1-10B)
+
+    After receiving access approval, install the HuggingFace CLI and authenticate:
+
+    ```bash
+    pip install huggingface_hub
+    huggingface-cli login
+    ```
+
+    You'll need to provide your HuggingFace access token, which you can create at [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+
+    <Info>
+      For more details on HuggingFace authentication, see the [official documentation](https://huggingface.co/docs/huggingface_hub/guides/cli).
+    </Info>
+  </Step>
+
+  <Step title="Verify installation">
+    Test your installation by running the inference script:
+
+    ```bash
+    python src/alpamayo_r1/test_inference.py
+    ```
+
+    <Note>
+      The first run will download example data and model weights (22 GB). Download time depends on your network bandwidth - expect around 2.5 minutes on a 100 MB/s connection.
+    </Note>
+
+    If the script runs successfully and outputs Chain-of-Causation reasoning and minADE metrics, your installation is complete.
+  </Step>
+</Steps>
+
+## Key dependencies
+
+Alpamayo 1 relies on the following core dependencies (automatically installed via `uv sync`):
+
+```toml
+accelerate>=1.12.0
+av>=16.0.1
+einops>=0.8.1
+pandas>=2.3.3
+physical_ai_av>=0.1.0
+pillow>=12.0.0
+torch==2.8.0
+torchvision>=0.23.0
+transformers==4.57.1
+flash-attn>=2.8.3
+```
+
+## Development dependencies
+
+For interactive notebook usage and visualization, you can install development dependencies:
+
+```bash
+uv sync --all-groups
+```
+
+This includes:
+- `matplotlib` - For trajectory visualization
+- `mediapy` - For image/video display
+- `ipykernel` and `ipywidgets` - For Jupyter notebook support
+
+## Troubleshooting
+
+### Flash Attention compatibility issues
+
+If you encounter issues with Flash Attention 2, you can switch to PyTorch's scaled dot-product attention:
+
+```python
+config.attn_implementation = "sdpa"
+```
+
+### CUDA out-of-memory errors
+
+If you experience OOM errors during inference:
+
+1. Verify your GPU has at least 24 GB VRAM:
+   ```bash
+   nvidia-smi
+   ```
+
+2. Reduce `num_traj_samples` when generating multiple trajectories
+
+3. Close other GPU-intensive applications
+
+4. Ensure no other processes are using GPU memory
+
+### Python version mismatch
+
+Alpamayo 1 requires Python 3.12.x specifically. If you have a different version:
+
+```bash
+# Check your Python version
+python --version
+
+# Install Python 3.12 if needed (example for Ubuntu)
+sudo apt update
+sudo apt install python3.12
+```
+
+### HuggingFace authentication issues
+
+If you receive authentication errors:
+
+1. Ensure you've requested and received access to both gated resources
+2. Verify your token has the necessary permissions
+3. Try logging out and back in:
+   ```bash
+   huggingface-cli logout
+   huggingface-cli login
+   ```
+
+## Next steps
+
+Now that you have Alpamayo 1 installed, you're ready to run inference:
+
+<Card title="Quickstart guide" icon="rocket" href="/quickstart">
+  Learn how to run inference and generate trajectory predictions
+</Card>

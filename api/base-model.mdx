@@ -1,0 +1,205 @@
+---
+title: ReasoningVLA
+description: Base Reasoning Vision-Language-Action model implementation
+---
+
+## Class: ReasoningVLA
+
+The `ReasoningVLA` class is the base model for reasoning-enabled Vision-Language-Action tasks. It combines a vision-language model (VLM) backbone with trajectory tokenization capabilities.
+
+**Inherits from:** `PreTrainedModel`, `TrajectoryFusionMixin`
+
+**Location:** `alpamayo_r1.models.base_model.ReasoningVLA`
+
+### Constructor
+
+```python
+ReasoningVLA(
+    config: ReasoningVLAConfig,
+    pretrained_modules: dict[str, torch.nn.Module] | None = None,
+    original_vocab_size: int | None = None,
+    print_param_count: bool = True,
+)
+```
+
+Initializes the ReasoningVLA base model with VLM backbone and trajectory tokenizers.
+
+<ParamField path="config" type="ReasoningVLAConfig" required>
+  Configuration object containing VLM settings, trajectory tokenizer configurations, and model parameters.
+</ParamField>
+
+<ParamField path="pretrained_modules" type="dict[str, torch.nn.Module] | None" default="None">
+  Dictionary of pretrained PyTorch modules. Can include:
+  - `"vlm"`: Pretrained vision-language model
+  - `"traj_tokenizer"`: Pretrained trajectory tokenizer
+</ParamField>
+
+<ParamField path="original_vocab_size" type="int | None" default="None">
+  Original vocabulary size of the VLM before adding trajectory tokens.
+</ParamField>
+
+<ParamField path="print_param_count" type="bool" default="True">
+  Whether to log total and trainable parameter counts during initialization.
+</ParamField>
+
+### Class Methods
+
+#### from_pretrained_submodules
+
+```python
+@classmethod
+def from_pretrained_submodules(
+    cls,
+    config: ReasoningVLAConfig,
+) -> "ReasoningVLA"
+```
+
+Load the model with pretrained submodules from HuggingFace.
+
+<ParamField path="config" type="ReasoningVLAConfig" required>
+  Configuration object specifying the VLM to load and tokenizer settings.
+</ParamField>
+
+<ResponseField name="model" type="ReasoningVLA">
+  Initialized ReasoningVLA model with pretrained VLM backbone and tokenizers loaded from the paths specified in config.
+</ResponseField>
+
+### Instance Methods
+
+#### fuse_traj_tokens
+
+```python
+def fuse_traj_tokens(
+    input_ids: torch.Tensor,
+    traj_data: dict[str, Any] | None = None
+) -> torch.Tensor
+```
+
+Fuse trajectory tokens into the input token IDs by replacing placeholder tokens with encoded trajectory tokens.
+
+<ParamField path="input_ids" type="torch.Tensor" required>
+  Input token IDs tensor with shape `[B, n_token]` containing placeholder trajectory tokens.
+</ParamField>
+
+<ParamField path="traj_data" type="dict[str, Any] | None" default="None">
+  Dictionary containing trajectory data:
+  - `ego_history_xyz`: History positions `[B, n_traj, T, 3]`
+  - `ego_history_rot`: History rotations `[B, n_traj, T, ...]`
+  - `ego_future_xyz`: (Optional) Future positions
+  - `ego_future_rot`: (Optional) Future rotations
+</ParamField>
+
+<ResponseField name="input_ids" type="torch.Tensor">
+  Input IDs with trajectory placeholder tokens replaced by actual encoded trajectory tokens. Shape: `[B, n_token]`
+</ResponseField>
+
+#### get_input_embeddings
+
+```python
+def get_input_embeddings() -> torch.nn.Module
+```
+
+Get the input embeddings layer of the model.
+
+<ResponseField name="embeddings" type="torch.nn.Module">
+  The embedding layer from the VLM's language model.
+</ResponseField>
+
+#### get_output_embeddings
+
+```python
+def get_output_embeddings() -> torch.nn.Module
+```
+
+Get the output embeddings (LM head) of the model.
+
+<ResponseField name="embeddings" type="torch.nn.Module">
+  The output embedding layer from the VLM.
+</ResponseField>
+
+#### tie_weights
+
+```python
+def tie_weights() -> None
+```
+
+Tie input and output embeddings if configured. Delegates to the VLM backbone's tie_weights method.
+
+### Attributes
+
+<ParamField path="vlm" type="torch.nn.Module">
+  The vision-language model backbone (e.g., Qwen3VLForConditionalGeneration).
+</ParamField>
+
+<ParamField path="tokenizer" type="AutoTokenizer">
+  Tokenizer with trajectory tokens and special tokens added.
+</ParamField>
+
+<ParamField path="traj_tokenizer" type="torch.nn.Module | None">
+  Trajectory tokenizer for encoding future trajectories to discrete tokens.
+</ParamField>
+
+<ParamField path="hist_traj_tokenizer" type="torch.nn.Module | None">
+  Trajectory tokenizer for encoding history trajectories. Defaults to `traj_tokenizer` if not separately configured.
+</ParamField>
+
+<ParamField path="special_token_ids" type="dict[str, int]">
+  Mapping of special token names to their token IDs.
+</ParamField>
+
+<ParamField path="original_vocab_size" type="int">
+  Original vocabulary size before adding trajectory tokens.
+</ParamField>
+
+### Example Usage
+
+```python
+import torch
+from alpamayo_r1.models.base_model import ReasoningVLA, ReasoningVLAConfig
+
+# Initialize configuration
+config = ReasoningVLAConfig(
+    vlm_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+    traj_vocab_size=768,
+    tokens_per_history_traj=16,
+    tokens_per_future_traj=64,
+)
+
+# Load model with pretrained submodules
+model = ReasoningVLA.from_pretrained_submodules(config)
+
+# Prepare trajectory data
+traj_data = {
+    "ego_history_xyz": torch.randn(2, 1, 10, 3),
+    "ego_history_rot": torch.randn(2, 1, 10, 4),
+}
+
+# Create input with trajectory placeholders
+input_ids = torch.randint(0, 1000, (2, 100))
+
+# Fuse trajectory tokens
+input_ids_with_traj = model.fuse_traj_tokens(input_ids, traj_data)
+
+print(f"Input shape: {input_ids_with_traj.shape}")
+print(f"Tokenizer vocab size: {len(model.tokenizer)}")
+```
+
+### Special Tokens
+
+The model adds the following special tokens to the tokenizer:
+
+- `<|traj_history|>`: History trajectory placeholder
+- `<|traj_future|>`: Future trajectory placeholder
+- `<|traj_history_start|>`: History trajectory start marker
+- `<|traj_history_end|>`: History trajectory end marker
+- `<|traj_future_start|>`: Future trajectory start marker
+- `<|traj_future_end|>`: Future trajectory end marker
+
+Additional special tokens for chain-of-thought, meta-actions, and other structured outputs are available when `add_special_tokens=True` in the config.
+
+### Notes
+
+- The model automatically resizes the VLM's token embeddings to accommodate trajectory tokens
+- Trajectory tokens are discrete tokens of the form `<i0>`, `<i1>`, ..., `<i{vocab_size-1}>`
+- The `TrajectoryFusionMixin` provides the `fuse_traj_tokens` functionality
+- Currently supports Qwen3-VL as the VLM backend

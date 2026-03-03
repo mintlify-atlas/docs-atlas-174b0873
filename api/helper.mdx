@@ -1,0 +1,141 @@
+---
+title: "Helper Module"
+description: "Utility functions for data processing and model inference"
+---
+
+The `helper` module provides utility functions for processing data and preparing inputs for the Alpamayo R1 model.
+
+## create_message
+
+Constructs a message structure with images for chain-of-thought reasoning.
+
+```python
+def create_message(frames: torch.Tensor) -> list[dict]
+```
+
+<ParamField path="frames" type="torch.Tensor" required>
+  Input frames with shape `(N, C, H, W)` where:
+  - N: number of frames
+  - C: number of channels (3 for RGB)
+  - H: image height
+  - W: image width
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  A list of message dictionaries in chat format containing:
+  - System message with driving assistant role
+  - User message with images and trajectory history placeholders
+  - Assistant message with chain-of-thought start token
+</ResponseField>
+
+### Example
+
+```python
+import torch
+from alpamayo_r1 import helper
+
+# Load data from dataset
+data = load_physical_aiavdataset(clip_id, t0_us=5_100_000)
+
+# Flatten camera and frame dimensions
+frames = data["image_frames"].flatten(0, 1)
+
+# Create message structure
+messages = helper.create_message(frames)
+```
+
+## get_processor
+
+Get the processor for the Qwen3-VL-2B-Instruct model with custom tokenizer.
+
+```python
+def get_processor(tokenizer: AutoTokenizer) -> AutoProcessor
+```
+
+<ParamField path="tokenizer" type="AutoTokenizer" required>
+  The tokenizer to use with the processor. Typically obtained from the model's tokenizer.
+</ParamField>
+
+<ResponseField name="return" type="AutoProcessor">
+  An AutoProcessor configured with:
+  - `min_pixels`: 163840
+  - `max_pixels`: 196608
+  - Custom tokenizer from input parameter
+</ResponseField>
+
+### Example
+
+```python
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1 import helper
+
+model = AlpamayoR1.from_pretrained("nvidia/Alpamayo-R1-10B")
+processor = helper.get_processor(model.tokenizer)
+
+# Apply chat template
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt"
+)
+```
+
+## to_device
+
+Recursively cast data to the specified device and dtype.
+
+```python
+def to_device(
+    data: Any,
+    device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None
+) -> Any
+```
+
+<ParamField path="data" type="Any" required>
+  Data to transfer. Can be:
+  - `torch.Tensor`: directly transferred to device/dtype
+  - `dict`: recursively processes all values
+  - `list`/`tuple`: recursively processes all elements
+  - Other types: returned unchanged
+</ParamField>
+
+<ParamField path="device" type="str | torch.device | None" default="None">
+  Target device (e.g., `"cuda"`, `"cpu"`, or `torch.device` object)
+</ParamField>
+
+<ParamField path="dtype" type="torch.dtype | None" default="None">
+  Target dtype (e.g., `torch.bfloat16`, `torch.float32`)
+</ParamField>
+
+<ResponseField name="return" type="Any">
+  Data with all tensors transferred to the specified device and dtype
+</ResponseField>
+
+### Example
+
+```python
+from alpamayo_r1 import helper
+import torch
+
+model_inputs = {
+    "tokenized_data": inputs,
+    "ego_history_xyz": data["ego_history_xyz"],
+    "ego_history_rot": data["ego_history_rot"],
+}
+
+# Transfer all inputs to CUDA
+model_inputs = helper.to_device(model_inputs, "cuda")
+
+# Transfer with specific dtype
+model_inputs = helper.to_device(model_inputs, "cuda", torch.bfloat16)
+```
+
+## Constants
+
+The module defines the following constants:
+
+- `MIN_PIXELS`: 163840 - Minimum number of pixels for image processing
+- `MAX_PIXELS`: 196608 - Maximum number of pixels for image processing
+- `BASE_PROCESSOR_NAME`: "Qwen/Qwen3-VL-2B-Instruct" - Base processor model name

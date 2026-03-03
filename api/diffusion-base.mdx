@@ -1,0 +1,158 @@
+---
+title: BaseDiffusion
+description: Base class for diffusion models in Alpamayo R1
+---
+
+## Overview
+
+`BaseDiffusion` is an abstract base class that defines the core interface for diffusion models in Alpamayo R1. All diffusion implementations inherit from this class and implement the `sample()` method.
+
+## Class Definition
+
+```python
+from alpamayo_r1.diffusion.base import BaseDiffusion
+```
+
+## Constructor
+
+<ParamField path="x_dims" type="list[int] | tuple[int] | int" required>
+  The dimension of the input tensor. Can be a single integer or a sequence of integers defining the shape.
+</ParamField>
+
+### Example
+
+```python
+from alpamayo_r1.diffusion.flow_matching import FlowMatching
+
+# Single dimension
+diffusion = FlowMatching(x_dims=128)
+
+# Multiple dimensions
+diffusion = FlowMatching(x_dims=[64, 64, 3])
+```
+
+## Methods
+
+### sample
+
+```python
+@torch.no_grad()
+def sample(
+    batch_size: int,
+    step_fn: StepFn,
+    device: torch.device = torch.device("cpu"),
+    return_all_steps: bool = False,
+    *args,
+    **kwargs,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+```
+
+Sample from the diffusion model using an iterative denoising process.
+
+<ParamField path="batch_size" type="int" required>
+  The number of samples to generate in parallel.
+</ParamField>
+
+<ParamField path="step_fn" type="StepFn" required>
+  The denoising step function that takes a noisy tensor `x` and a timestep `t` and returns either a denoised tensor, a vector field, or noise depending on the prediction type of the diffusion model.
+  
+  The step function should have the signature:
+  ```python
+  def step_fn(*, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor
+  ```
+</ParamField>
+
+<ParamField path="device" type="torch.device" default="torch.device('cpu')">
+  The PyTorch device to use for sampling (e.g., "cpu", "cuda").
+</ParamField>
+
+<ParamField path="return_all_steps" type="bool" default="False">
+  Whether to return the outputs from all intermediate sampling steps.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="output" type="torch.Tensor | tuple[torch.Tensor, torch.Tensor]">
+  If `return_all_steps=False`: Returns the final sampled tensor with shape `[B, *x_dims]`.
+  
+  If `return_all_steps=True`: Returns a tuple of:
+  - All sampled tensors with shape `[B, T, *x_dims]` where T is the number of steps
+  - The time steps with shape `[T]`
+</ResponseField>
+
+## StepFn Protocol
+
+The `StepFn` protocol defines the interface for denoising step functions:
+
+```python
+from alpamayo_r1.diffusion.base import StepFn
+
+class StepFn(Protocol):
+    def __call__(
+        self,
+        *,
+        x: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        ...
+```
+
+<ParamField path="x" type="torch.Tensor" required>
+  The input tensor to denoise.
+</ParamField>
+
+<ParamField path="t" type="torch.Tensor" required>
+  The timestep tensor indicating the current noise level.
+</ParamField>
+
+## Diffusion Sampling Process
+
+The diffusion sampling process works as follows:
+
+1. **Initialization**: Start with random noise sampled from a standard normal distribution
+2. **Iterative Denoising**: Apply the step function repeatedly at different timesteps to gradually denoise the sample
+3. **Output**: Return the final denoised sample (and optionally all intermediate steps)
+
+The specific denoising schedule and integration method depend on the concrete implementation (e.g., [Flow Matching](/api/flow-matching)).
+
+## Usage Example
+
+```python
+import torch
+from alpamayo_r1.diffusion.flow_matching import FlowMatching
+
+# Initialize diffusion model
+diffusion = FlowMatching(
+    x_dims=[64, 64, 3],  # Image dimensions
+    num_inference_steps=20
+)
+
+# Define a step function (typically wraps your neural network)
+def step_fn(*, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    # Your model predicts the vector field
+    return model(x, t)
+
+# Sample new data
+samples = diffusion.sample(
+    batch_size=4,
+    step_fn=step_fn,
+    device=torch.device("cuda")
+)
+
+print(samples.shape)  # [4, 64, 64, 3]
+
+# Sample with all intermediate steps
+all_samples, timesteps = diffusion.sample(
+    batch_size=4,
+    step_fn=step_fn,
+    device=torch.device("cuda"),
+    return_all_steps=True
+)
+
+print(all_samples.shape)  # [4, 21, 64, 64, 3]
+print(timesteps.shape)    # [21]
+```
+
+## See Also
+
+- [FlowMatching](/api/flow-matching) - Flow matching diffusion implementation

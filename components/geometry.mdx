@@ -1,0 +1,452 @@
+---
+title: Geometry Utilities
+description: Rotation matrices, coordinate transformations, and angular operations
+---
+
+The geometry module provides essential utilities for handling rotations, coordinate transformations, and angular operations in 2D and 3D space. These functions are fundamental for processing vehicle poses, sensor data, and trajectory representations.
+
+## Overview
+
+Autonomous driving systems must handle:
+
+- **3D rotations**: Vehicle orientation in 3D space (SO(3))
+- **2D rotations**: Planar motion on roads
+- **Yaw extraction**: Converting 3D orientation to heading angle
+- **Coordinate transforms**: Moving between reference frames
+- **Angle wrapping**: Handling angular discontinuities at ±π
+
+The geometry utilities support both NumPy and PyTorch, enabling seamless integration across data processing and model inference.
+
+## Rotation Representations
+
+### SO(3) to Yaw Conversion
+
+Extract the yaw (heading) angle from a 3D rotation matrix:
+
+```python
+import torch
+from alpamayo_r1.geometry.rotation import so3_to_yaw_torch
+
+# Vehicle rotation matrices: (batch, 3, 3)
+rot_matrices = torch.tensor([...])  # SO(3) rotation matrices
+
+# Extract yaw angles
+yaw = so3_to_yaw_torch(rot_matrices)  # (batch,)
+```
+
+This assumes rotations are described in XYZ Euler order. The implementation from `rotation.py:25-38`:
+
+```python
+def so3_to_yaw_torch(rot_mat: torch.Tensor) -> torch.Tensor:
+    """Computes the yaw angle given an SO(3) rotation matrix.
+    
+    Args:
+        rot_mat: [..., 3, 3] rotation matrices
+        
+    Returns:
+        [...] yaw angles in radians
+    """
+    cos_th_cos_phi = rot_mat[..., 0, 0]
+    cos_th_sin_phi = rot_mat[..., 1, 0]
+    return torch.atan2(cos_th_sin_phi, cos_th_cos_phi)
+```
+
+A NumPy version is also available as `so3_to_yaw_np()` at `rotation.py:41-53`.
+
+### 2D Rotation Matrices
+
+Create 2D rotation matrices from angles:
+
+```python
+from alpamayo_r1.geometry.rotation import rotation_matrix_torch
+
+# Angles in radians
+angles = torch.tensor([0.0, np.pi/4, np.pi/2])  # (3,)
+
+# Create rotation matrices
+rot_mats = rotation_matrix_torch(angles)  # (3, 2, 2)
+
+# rot_mats[1] ≈ [[0.707, -0.707],
+#                 [0.707,  0.707]]  (45° rotation)
+```
+
+Implementation from `rotation.py:109-125`:
+
+```python
+def rotation_matrix_torch(angle: torch.Tensor) -> torch.Tensor:
+    """Creates 2D rotation matrices.
+    
+    Args:
+        angle: [...] angles in radians
+        
+    Returns:
+        [..., 2, 2] rotation matrices
+    """
+    rotmat = torch.stack(
+        [
+            torch.stack([torch.cos(angle), -torch.sin(angle)], dim=-1),
+            torch.stack([torch.sin(angle), torch.cos(angle)], dim=-1),
+        ],
+        dim=-2,
+    )
+    return rotmat
+```
+
+NumPy version: `rotation_matrix()` at `rotation.py:85-106`.
+
+### Converting Between 2D and 3D
+
+#### 3D → 2D Projection
+
+Project a 3D rotation to the XY plane:
+
+```python
+from alpamayo_r1.geometry.rotation import rot_3d_to_2d
+
+# 3D rotation matrices: (..., 3, 3)
+rot_3d = torch.tensor([...])  
+
+# Project to 2D (XY plane)
+rot_2d = rot_3d_to_2d(rot_3d)  # (..., 2, 2)
+```
+
+This extracts the X and Y axes, projects them to the XY plane, and applies Gram-Schmidt orthogonalization for numerical stability. See `rotation.py:177-194`.
+
+#### 2D → 3D Embedding
+
+Embed a 2D rotation into 3D space (flat ground plane assumption):
+
+```python
+from alpamayo_r1.geometry.rotation import rot_2d_to_3d
+
+# 2D rotation matrices: (..., 2, 2)
+rot_2d = rotation_matrix_torch(yaw_angles)
+
+# Embed to 3D (Z-axis unchanged)
+rot_3d = rot_2d_to_3d(rot_2d)  # (..., 3, 3)
+
+# rot_3d[..., :2, :2] == rot_2d
+# rot_3d[..., 2, :] == [0, 0, 1]  (Z-axis)
+# rot_3d[..., :, 2] == [0, 0, 1]  (Z-axis)
+```
+
+From `rotation.py:197-213`.
+
+## Coordinate Transformations
+
+### 2D Coordinate Transform
+
+Apply rotation and translation to 2D points:
+
+```python
+from alpamayo_r1.geometry.rotation import transform_coords_2d_np
+import numpy as np
+
+# Points in local frame: (N, 2)
+local_coords = np.array([[1.0, 0.0], [0.0, 1.0]])
+
+# Transform to global frame
+global_coords = transform_coords_2d_np(
+    coords=local_coords,
+    offset=np.array([10.0, 5.0]),  # Translation
+    angle=np.pi / 4,                # Rotation (45°)
+)
+
+# Or provide pre-computed rotation matrix
+rot_mat = rotation_matrix(np.pi / 4)
+global_coords = transform_coords_2d_np(
+    coords=local_coords,
+    offset=np.array([10.0, 5.0]),
+    rot_mat=rot_mat,  # If provided, angle is ignored
+)
+```
+
+From `rotation.py:128-153`. The transformation applies rotation first, then translation:
+
+```python
+def transform_coords_2d_np(
+    coords: np.ndarray,              # (..., 2)
+    offset: Optional[np.ndarray],    # (..., 2)
+    angle: Optional[np.ndarray],     # (...)
+    rot_mat: Optional[np.ndarray],   # (..., 2, 2)
+) -> np.ndarray:
+    if rot_mat is None and angle is not None:
+        rot_mat = rotation_matrix(angle)
+    
+    if rot_mat is not None:
+        coords = np.einsum("...ij,...j->...i", rot_mat, coords)
+    
+    if offset is not None:
+        coords += offset
+    
+    return coords
+```
+
+## Angular Operations
+
+### Angle Wrapping
+
+Normalize angles to the range `[-π, π)`:
+
+```python
+from alpamayo_r1.geometry.rotation import angle_wrap, round_2pi_torch
+import numpy as np
+import torch
+
+# NumPy version
+angles_np = np.array([0.0, 3.5, -4.0, 2*np.pi])
+wrapped_np = angle_wrap(angles_np)
+# Output: [0.0, -2.78..., 2.28..., 0.0]
+
+# PyTorch version (numerically robust)
+angles_torch = torch.tensor([0.0, 3.5, -4.0, 2*np.pi])
+wrapped_torch = round_2pi_torch(angles_torch)
+```
+
+Two implementations are provided:
+
+1. **Basic wrapping** (`angle_wrap` at `rotation.py:71-82`):
+   ```python
+   def angle_wrap(radians: TensorOrNDArray) -> TensorOrNDArray:
+       return (radians + np.pi) % (2 * np.pi) - np.pi
+   ```
+
+2. **Robust wrapping** (`round_2pi_torch` at `rotation.py:237-246`):
+   ```python
+   def round_2pi_torch(x: torch.Tensor) -> torch.Tensor:
+       return torch.atan2(torch.sin(x), torch.cos(x))
+   ```
+
+The robust version using `atan2(sin, cos)` handles edge cases better but is slightly slower.
+
+### Robust Arctan2
+
+Stable arctan2 that avoids NaN when both inputs are zero:
+
+```python
+from alpamayo_r1.geometry.rotation import ratan2
+
+# Standard torch.arctan2(0, 0) = NaN
+# ratan2(0, 0) = 0
+
+angle = ratan2(
+    s=torch.tensor([0.0, 1.0]),  # sin values
+    c=torch.tensor([0.0, 1.0]),  # cos values
+)  # Returns: [0.0, 0.785...]
+```
+
+From `rotation.py:216-222`, this adds a small epsilon when `c` is near zero to prevent division issues.
+
+## Euler Angles
+
+Convert Euler angles to SO(3) rotation matrices (NumPy only):
+
+```python
+from alpamayo_r1.geometry.rotation import euler_2_so3
+import numpy as np
+
+# Euler angles: (N, 3) in [roll, pitch, yaw] order
+euler_angles = np.array([
+    [0.0, 0.0, 0.0],        # No rotation
+    [0.0, 0.0, np.pi/2],    # 90° yaw
+])
+
+# Convert to rotation matrices
+rot_matrices = euler_2_so3(
+    euler_angles,
+    degrees=False,  # Input in radians
+    seq="xyz",      # Rotation order
+)  # (2, 3, 3)
+```
+
+This wraps `scipy.spatial.transform.Rotation`. See `rotation.py:56-68`.
+
+## Advanced: Gram-Schmidt Orthogonalization
+
+Stably orthonormalize two 3D vectors:
+
+```python
+from alpamayo_r1.geometry.rotation import stable_gramschmidt
+
+# Two non-orthogonal 3D vectors
+vectors = torch.tensor([[
+    [1.0, 0.1, 0.0],  # x vector (slightly off)
+    [0.1, 1.0, 0.0],  # y vector (slightly off)
+]])  # (1, 3, 2)
+
+# Orthonormalize to create full rotation matrix
+rot_matrix = stable_gramschmidt(vectors)  # (1, 3, 3)
+
+# rot_matrix contains orthonormal (x, y, z) where z = x × y
+```
+
+From `rotation.py:156-174`, this:
+1. Normalizes the first vector
+2. Projects the second vector onto the orthogonal complement
+3. Normalizes the second vector
+4. Computes the third vector as the cross product
+
+Useful for reconstructing rotation matrices from noisy or incomplete data.
+
+## Usage Examples
+
+### Example 1: Transform Trajectory to Vehicle Frame
+
+```python
+import torch
+from alpamayo_r1.geometry.rotation import (
+    so3_to_yaw_torch,
+    rotation_matrix_torch,
+    rot_2d_to_3d,
+)
+
+# Global trajectory: (batch, time, 3)
+global_xyz = torch.tensor([...])  # (B, T, 3)
+global_rot = torch.tensor([...])  # (B, T, 3, 3)
+
+# Current vehicle pose (last timestep)
+vehicle_xyz = global_xyz[:, -1]  # (B, 3)
+vehicle_rot = global_rot[:, -1]  # (B, 3, 3)
+vehicle_yaw = so3_to_yaw_torch(vehicle_rot)  # (B,)
+
+# Transform trajectory to vehicle frame
+relative_xyz = global_xyz - vehicle_xyz.unsqueeze(1)
+
+# Rotate to vehicle frame (inverse rotation)
+inv_yaw = -vehicle_yaw
+rot_2d = rotation_matrix_torch(inv_yaw)  # (B, 2, 2)
+relative_xy = torch.einsum(
+    "bij,btj->bti",
+    rot_2d,
+    relative_xyz[..., :2],
+)  # (B, T, 2)
+```
+
+### Example 2: Heading Smoothing
+
+```python
+import torch
+from alpamayo_r1.geometry.rotation import round_2pi_torch
+
+# Raw heading angles with discontinuities
+raw_headings = torch.tensor([3.1, 3.14, -3.1, -3.0, -2.9])
+
+# Unwrap by tracking jumps
+unwrapped = torch.zeros_like(raw_headings)
+unwrapped[0] = raw_headings[0]
+
+for i in range(1, len(raw_headings)):
+    diff = raw_headings[i] - raw_headings[i-1]
+    diff = round_2pi_torch(diff)  # Wrap difference
+    unwrapped[i] = unwrapped[i-1] + diff
+
+# Now unwrapped is continuous: [3.1, 3.14, 3.18, 3.28, 3.38]
+```
+
+### Example 3: Batch Coordinate Transforms
+
+```python
+import numpy as np
+from alpamayo_r1.geometry.rotation import transform_coords_2d_np
+
+# Waypoints in vehicle frame: (batch, waypoints, 2)
+local_waypoints = np.random.randn(32, 64, 2)
+
+# Vehicle poses: (batch, 3) - [x, y, yaw]
+vehicle_poses = np.random.randn(32, 3)
+
+# Transform all waypoints to global frame
+global_waypoints = transform_coords_2d_np(
+    coords=local_waypoints,
+    offset=vehicle_poses[:, None, :2],  # (32, 1, 2)
+    angle=vehicle_poses[:, 2],           # (32,)
+)  # (32, 64, 2)
+```
+
+## Best Practices
+
+1. **Use robust angle operations**: Prefer `round_2pi_torch()` over manual modulo for numerical stability
+2. **Avoid gimbal lock**: When possible, work with rotation matrices rather than Euler angles
+3. **Unwrap angles**: For trajectory smoothing, unwrap angles to avoid ±π discontinuities
+4. **Batch operations**: Vectorize coordinate transforms to leverage GPU parallelism
+5. **Numerical stability**: Use `stable_gramschmidt()` when reconstructing rotation matrices
+6. **Type consistency**: Match NumPy/PyTorch usage with your data pipeline
+
+## Common Pitfalls
+
+1. **Forgetting to wrap angles**: Always wrap angles after arithmetic operations
+   ```python
+   # Wrong
+   new_angle = old_angle + delta  # Can go outside [-π, π]
+   
+   # Correct
+   new_angle = round_2pi_torch(old_angle + delta)
+   ```
+
+2. **Incorrect transform order**: Rotation must happen before translation
+   ```python
+   # Wrong
+   coords = coords + offset  # Translate first
+   coords = rot @ coords     # Then rotate
+   
+   # Correct
+   coords = rot @ coords     # Rotate first
+   coords = coords + offset  # Then translate
+   ```
+
+3. **Mixing 2D and 3D**: Ensure dimensional consistency
+   ```python
+   # Wrong
+   rot_2d = rotation_matrix_torch(yaw)  # (2, 2)
+   xyz = rot_2d @ xyz  # xyz is (3,) - dimension mismatch!
+   
+   # Correct
+   rot_2d = rotation_matrix_torch(yaw)
+   xy = rot_2d @ xyz[:2]  # Only transform x, y
+   xyz = torch.cat([xy, xyz[2:3]])  # Preserve z
+   ```
+
+## Performance Notes
+
+- **NumPy functions**: Optimized for CPU, good for preprocessing
+- **PyTorch functions**: GPU-accelerated, use for training/inference
+- **Batched operations**: Always prefer batched operations over loops
+  - `rotation_matrix_torch(angles)` where `angles.shape = (B,)` → `(B, 2, 2)`
+  - Much faster than looping over batch dimension
+
+## API Reference
+
+### Rotation Conversions
+
+| Function | Input | Output | Description |
+|----------|-------|--------|-------------|
+| `so3_to_yaw_torch` | (..., 3, 3) | (...,) | Extract yaw from 3D rotation |
+| `so3_to_yaw_np` | (..., 3, 3) | (...,) | NumPy version |
+| `euler_2_so3` | (N, 3) | (N, 3, 3) | Euler angles → rotation matrices |
+| `rot_2d_to_3d` | (..., 2, 2) | (..., 3, 3) | Embed 2D rotation in 3D |
+| `rot_3d_to_2d` | (..., 3, 3) | (..., 2, 2) | Project 3D rotation to 2D |
+
+### Rotation Matrices
+
+| Function | Input | Output | Description |
+|----------|-------|--------|-------------|
+| `rotation_matrix_torch` | (...,) | (..., 2, 2) | Create 2D rotation matrices |
+| `rotation_matrix` | scalar or (...,) | (2, 2) or (..., 2, 2) | NumPy version |
+| `stable_gramschmidt` | (..., 3, 2) | (..., 3, 3) | Orthonormalize vectors |
+
+### Coordinate Transforms
+
+| Function | Input | Output | Description |
+|----------|-------|--------|-------------|
+| `transform_coords_2d_np` | (..., 2) + offset/angle | (..., 2) | Rotate and translate points |
+
+### Angular Operations
+
+| Function | Input | Output | Description |
+|----------|-------|--------|-------------|
+| `angle_wrap` | (...,) | (...,) | Wrap to [-π, π) |
+| `round_2pi_torch` | (...,) | (...,) | Robust angle wrapping |
+| `round_2pi` | (...,) | (...,) | NumPy version |
+| `ratan2` | sin, cos | angle | Robust arctan2 |
+
+For complete implementation details, see `geometry/rotation.py`.

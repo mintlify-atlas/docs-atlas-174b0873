@@ -1,0 +1,508 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for Alpamayo 1
+---
+
+This guide helps you resolve common issues when working with Alpamayo 1.
+
+## CUDA Out-of-Memory Errors
+
+### Symptoms
+
+```bash
+torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate X.XX GiB
+```
+
+### Solutions
+
+<Steps>
+  <Step title="Verify GPU requirements">
+    Ensure you have at least **24 GB VRAM**. Check your GPU memory:
+    
+    ```bash
+    nvidia-smi
+    ```
+    
+    <Warning>
+    GPUs with less than 24 GB VRAM (e.g., RTX 3060, RTX 3070, or most consumer GPUs with 16 GB or less) will likely encounter OOM errors during inference.
+    </Warning>
+  </Step>
+
+  <Step title="Reduce trajectory samples">
+    Lower the `num_traj_samples` parameter in your inference code:
+    
+    ```python
+    # Before (may cause OOM)
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=model_inputs,
+        num_traj_samples=5,  # Generates 5 trajectories
+        ...
+    )
+    
+    # After (more memory efficient)
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=model_inputs,
+        num_traj_samples=1,  # Generates 1 trajectory
+        ...
+    )
+    ```
+    
+    <Note>
+    The test script uses `num_traj_samples=1` by default for GPU memory compatibility. You can increase this value on higher-memory GPUs.
+    </Note>
+  </Step>
+
+  <Step title="Close other GPU applications">
+    Free up GPU memory by closing other applications:
+    
+    ```bash
+    # Check GPU processes
+    nvidia-smi
+    
+    # Kill a specific process (replace PID with actual process ID)
+    kill -9 PID
+    ```
+  </Step>
+
+  <Step title="Clear GPU cache">
+    In Python/Jupyter, clear the CUDA cache:
+    
+    ```python
+    import torch
+    torch.cuda.empty_cache()
+    ```
+    
+    For persistent issues, restart your Python kernel or terminal session.
+  </Step>
+</Steps>
+
+### Tested Hardware Configurations
+
+The following GPUs have been successfully tested:
+
+| GPU Model | VRAM | Status |
+|-----------|------|--------|
+| RTX 3090 | 24 GB | ✅ Tested |
+| RTX 4090 | 24 GB | ✅ Tested |
+| A5000 | 24 GB | ✅ Tested |
+| A100 | 40/80 GB | ✅ Tested |
+| H100 | 80 GB | ✅ Tested |
+| RTX 3060 | 12 GB | ❌ Insufficient memory |
+| RTX 3070 | 8 GB | ❌ Insufficient memory |
+
+## Flash Attention Issues
+
+### Symptoms
+
+```python
+ImportError: Flash Attention is not installed or incompatible with your system
+```
+
+or
+
+```python
+RuntimeError: FlashAttention only supports Ampere GPUs or newer
+```
+
+### Solution
+
+The model uses Flash Attention 2 by default for improved performance. If you encounter compatibility issues with your GPU architecture:
+
+<CodeGroup>
+```python Using SDPA (Recommended Fallback)
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+import torch
+
+# Load model with PyTorch's scaled dot-product attention instead
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B",
+    dtype=torch.bfloat16,
+    attn_implementation="sdpa"  # Use PyTorch native attention
+).to("cuda")
+```
+
+```python Using Eager Attention
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+import torch
+
+# Use standard eager attention (slower but most compatible)
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B",
+    dtype=torch.bfloat16,
+    attn_implementation="eager"
+).to("cuda")
+```
+</CodeGroup>
+
+<Note>
+Flash Attention 2 requires NVIDIA GPUs with compute capability ≥ 8.0 (Ampere or newer: RTX 30-series, A-series, H-series). Older architectures should use "sdpa" or "eager".
+</Note>
+
+## HuggingFace Authentication Issues
+
+### Symptom 1: Access Denied
+
+```bash
+HTTPError: 401 Client Error: Unauthorized for url
+```
+
+### Solution: Authenticate and Request Access
+
+<Steps>
+  <Step title="Request access to gated resources">
+    Visit these pages and request access:
+    - [Physical AI AV Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles)
+    - [Alpamayo-R1-10B Model](https://huggingface.co/nvidia/Alpamayo-R1-10B)
+    
+    <Warning>
+    Access approval may take some time. You'll receive an email notification when approved.
+    </Warning>
+  </Step>
+
+  <Step title="Create a HuggingFace access token">
+    1. Go to [HuggingFace Settings > Tokens](https://huggingface.co/settings/tokens)
+    2. Click "New token"
+    3. Select "Read" permissions
+    4. Copy the generated token
+  </Step>
+
+  <Step title="Authenticate with the CLI">
+    ```bash
+    # Install HuggingFace CLI if needed
+    pip install huggingface_hub
+    
+    # Login with your token
+    huggingface-cli login
+    ```
+    
+    Paste your token when prompted.
+  </Step>
+
+  <Step title="Verify authentication">
+    ```bash
+    huggingface-cli whoami
+    ```
+    
+    This should display your HuggingFace username.
+  </Step>
+</Steps>
+
+### Symptom 2: Token Not Found
+
+```bash
+OSError: You are trying to access a gated repo.
+```
+
+### Solution: Set Token Environment Variable
+
+```bash
+# Set token as environment variable
+export HF_TOKEN="your_token_here"
+
+# Or use in Python
+import os
+os.environ["HF_TOKEN"] = "your_token_here"
+```
+
+Alternatively, pass the token directly:
+
+```python
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B",
+    dtype=torch.bfloat16,
+    token="your_token_here"  # Pass token explicitly
+).to("cuda")
+```
+
+## Installation Issues
+
+### Python Version Mismatch
+
+**Symptom:**
+```bash
+Requires-Python >=3.12,<3.13
+```
+
+**Solution:**
+
+Alpamayo 1 requires Python 3.12.x specifically. Check your version:
+
+```bash
+python --version
+```
+
+If you have a different version, install Python 3.12:
+
+<CodeGroup>
+```bash Using uv (Recommended)
+# uv automatically manages Python versions
+uv venv ar1_venv --python 3.12
+source ar1_venv/bin/activate
+uv sync --active
+```
+
+```bash Using pyenv
+# Install Python 3.12
+pyenv install 3.12.3
+pyenv local 3.12.3
+
+# Create virtual environment
+python -m venv ar1_venv
+source ar1_venv/bin/activate
+pip install -e .
+```
+</CodeGroup>
+
+### Dependency Conflicts
+
+**Symptom:**
+```bash
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed.
+```
+
+**Solution:**
+
+Use `uv` for dependency management as recommended:
+
+```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# Create fresh environment
+uv venv ar1_venv
+source ar1_venv/bin/activate
+uv sync --active
+```
+
+<Note>
+`uv` provides faster, more reliable dependency resolution compared to pip.
+</Note>
+
+## Model Download Issues
+
+### Slow Download Speed
+
+**Symptom:** Model weights (22 GB) are downloading very slowly.
+
+**Solutions:**
+
+<AccordionGroup>
+  <Accordion title="Use a wired connection">
+    For reference, downloads take approximately 2.5 minutes on a 100 MB/s wired connection. WiFi connections may be significantly slower.
+  </Accordion>
+
+  <Accordion title="Resume interrupted downloads">
+    HuggingFace Hub automatically resumes interrupted downloads. If download fails, simply run the script again:
+    
+    ```bash
+    python src/alpamayo_r1/test_inference.py
+    ```
+  </Accordion>
+
+  <Accordion title="Use HuggingFace CLI for manual download">
+    ```bash
+    # Download model weights manually
+    huggingface-cli download nvidia/Alpamayo-R1-10B
+    ```
+  </Accordion>
+
+  <Accordion title="Check disk space">
+    Ensure you have at least 30 GB of free disk space:
+    
+    ```bash
+    df -h
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Download Verification Failed
+
+**Symptom:**
+```bash
+OSError: Unable to load weights from checkpoint
+```
+
+**Solution:**
+
+Clear the cached download and retry:
+
+```bash
+# Remove cached model files
+rm -rf ~/.cache/huggingface/hub/models--nvidia--Alpamayo-R1-10B
+
+# Re-download
+python src/alpamayo_r1/test_inference.py
+```
+
+## Runtime Errors
+
+### Dataset Loading Errors
+
+**Symptom:**
+```python
+KeyError: clip_id not found in dataset
+```
+
+**Solution:**
+
+Ensure you're using a valid clip ID from the dataset:
+
+```python
+from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+
+# Use the example clip ID from the test script
+clip_id = "030c760c-ae38-49aa-9ad8-f5650a545d26"
+data = load_physical_aiavdataset(clip_id, t0_us=5_100_000)
+```
+
+Or load from the curated list:
+
+```python
+import pandas as pd
+
+clip_ids = pd.read_parquet("clip_ids.parquet")["clip_id"].tolist()
+clip_id = clip_ids[0]  # Use first clip
+```
+
+### Non-Deterministic Output Variance
+
+**Symptom:** Getting different minADE values across runs.
+
+**Explanation:**
+
+This is **expected behavior**. From `src/alpamayo_r1/test_inference.py:73-77`:
+
+```python
+print(
+    "Note: VLA-reasoning models produce nondeterministic outputs due to trajectory sampling, "
+    "hardware differences, etc. With num_traj_samples=1 (set for GPU memory compatibility), "
+    "variance in minADE is expected. For visual sanity checks, see notebooks/inference.ipynb"
+)
+```
+
+**Mitigation:**
+
+<Steps>
+  <Step title="Set random seeds">
+    ```python
+    import torch
+    torch.cuda.manual_seed_all(42)
+    ```
+    
+    Note: This improves but doesn't guarantee exact reproducibility.
+  </Step>
+
+  <Step title="Increase trajectory samples">
+    Generate multiple trajectories and use the best:
+    
+    ```python
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=model_inputs,
+        num_traj_samples=5,  # Generate multiple samples
+        ...
+    )
+    ```
+  </Step>
+
+  <Step title="Use the notebook for visual validation">
+    See the [notebook tutorial](/guides/notebook-tutorial) for trajectory visualization to qualitatively assess model performance.
+  </Step>
+</Steps>
+
+## Performance Issues
+
+### Slow Inference Speed
+
+**Symptoms:** Inference takes longer than expected.
+
+**Optimizations:**
+
+<Accordion title="Use bfloat16 precision">
+  ```python
+  # Always use bfloat16 for optimal performance
+  model = AlpamayoR1.from_pretrained(
+      "nvidia/Alpamayo-R1-10B",
+      dtype=torch.bfloat16  # Not float16 or float32
+  ).to("cuda")
+  ```
+</Accordion>
+
+<Accordion title="Enable autocast">
+  ```python
+  with torch.autocast("cuda", dtype=torch.bfloat16):
+      pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(...)
+  ```
+</Accordion>
+
+<Accordion title="Use Flash Attention if supported">
+  ```python
+  # Default behavior (fastest if supported)
+  model = AlpamayoR1.from_pretrained(
+      "nvidia/Alpamayo-R1-10B",
+      dtype=torch.bfloat16
+      # attn_implementation defaults to "flash_attention_2"
+  ).to("cuda")
+  ```
+</Accordion>
+
+<Accordion title="Reduce max_generation_length">
+  ```python
+  # Shorter reasoning traces = faster inference
+  pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+      data=model_inputs,
+      max_generation_length=128,  # Reduced from 256
+      ...
+  )
+  ```
+</Accordion>
+
+## Getting Help
+
+If you encounter issues not covered in this guide:
+
+<CardGroup cols={2}>
+  <Card title="Model Card" icon="huggingface" href="https://huggingface.co/nvidia/Alpamayo-R1-10B">
+    Check the HuggingFace Model Card for comprehensive model details
+  </Card>
+  <Card title="Paper" icon="file-lines" href="https://arxiv.org/abs/2511.00088">
+    Read the research paper for architectural and methodological details
+  </Card>
+  <Card title="Dataset" icon="database" href="https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles">
+    Visit the PhysicalAI-AV Dataset page for data-related questions
+  </Card>
+  <Card title="GitHub Issues" icon="github">
+    Open an issue on the GitHub repository for bug reports
+  </Card>
+</CardGroup>
+
+## FAQ
+
+<AccordionGroup>
+  <Accordion title="Can I use this model on AMD GPUs or Apple Silicon?">
+    No, the model requires NVIDIA CUDA-compatible GPUs. AMD and Apple Silicon are not currently supported.
+  </Accordion>
+
+  <Accordion title="What about inference on CPU?">
+    CPU inference is not recommended due to:
+    - Extremely slow performance (hours per sample)
+    - High memory requirements (>64 GB RAM)
+    - Lack of optimization for CPU execution
+  </Accordion>
+
+  <Accordion title="Can I quantize the model to reduce memory usage?">
+    While technically possible, the released model has been tested with bfloat16 precision on 24+ GB GPUs. Quantization (int8, int4) is not officially supported and may degrade performance.
+  </Accordion>
+
+  <Accordion title="Why does my minADE differ from the paper?">
+    Several factors can cause differences:
+    - Different random seeds
+    - Hardware variations
+    - Number of trajectory samples (`num_traj_samples`)
+    - This release doesn't include RL post-training from the paper
+    
+    See "Non-Deterministic Output Variance" above for details.
+  </Accordion>
+</AccordionGroup>

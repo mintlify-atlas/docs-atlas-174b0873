@@ -1,0 +1,173 @@
+---
+title: "Data Loader"
+description: "Load data from PhysicalAI AV dataset for model inference"
+---
+
+The data loader module provides functionality to load and prepare data from the PhysicalAI AV dataset for Alpamayo R1 model inference.
+
+## load_physical_aiavdataset
+
+Load data from physical_ai_av for model inference.
+
+This function loads a sample from the physical_ai_av dataset and converts it to the format expected by AlpamayoR1 model inference.
+
+```python
+def load_physical_aiavdataset(
+    clip_id: str,
+    t0_us: int = 5_100_000,
+    avdi: physical_ai_av.PhysicalAIAVDatasetInterface | None = None,
+    maybe_stream: bool = True,
+    num_history_steps: int = 16,
+    num_future_steps: int = 64,
+    time_step: float = 0.1,
+    camera_features: list | None = None,
+    num_frames: int = 4,
+) -> dict[str, Any]
+```
+
+### Parameters
+
+<ParamField path="clip_id" type="str" required>
+  The clip ID to load data from. Can be obtained from `vla_golden.parquet`.
+</ParamField>
+
+<ParamField path="t0_us" type="int" default="5_100_000">
+  The timestamp (in microseconds) at which to sample the trajectory. Default is 5.1 seconds into the clip.
+  
+  <Note>
+  Must be greater than `num_history_steps * time_step * 1_000_000` to ensure sufficient history data.
+  </Note>
+</ParamField>
+
+<ParamField path="avdi" type="physical_ai_av.PhysicalAIAVDatasetInterface | None" default="None">
+  Optional pre-initialized PhysicalAIAVDatasetInterface. If None, creates a new instance.
+</ParamField>
+
+<ParamField path="maybe_stream" type="bool" default="True">
+  Whether to stream data from HuggingFace if not downloaded locally.
+</ParamField>
+
+<ParamField path="num_history_steps" type="int" default="16">
+  Number of history trajectory steps. Default is 16 steps for 1.6 seconds at 10Hz.
+</ParamField>
+
+<ParamField path="num_future_steps" type="int" default="64">
+  Number of future trajectory steps. Default is 64 steps for 6.4 seconds at 10Hz.
+</ParamField>
+
+<ParamField path="time_step" type="float" default="0.1">
+  Time step between trajectory points in seconds. Default is 0.1s (10Hz).
+</ParamField>
+
+<ParamField path="camera_features" type="list | None" default="None">
+  List of camera features to load. If None, uses 4 default cameras:
+  - `CAMERA_CROSS_LEFT_120FOV`
+  - `CAMERA_FRONT_WIDE_120FOV`
+  - `CAMERA_CROSS_RIGHT_120FOV`
+  - `CAMERA_FRONT_TELE_30FOV`
+</ParamField>
+
+<ParamField path="num_frames" type="int" default="4">
+  Number of frames per camera to load. Default is 4 frames.
+</ParamField>
+
+### Returns
+
+<ResponseField name="return" type="dict[str, Any]">
+  A dictionary with the following keys:
+  
+  <Expandable title="Dictionary keys">
+    <ResponseField name="image_frames" type="torch.Tensor">
+      Camera images with shape `(N_cameras, num_frames, 3, H, W)`
+    </ResponseField>
+    
+    <ResponseField name="camera_indices" type="torch.Tensor">
+      Camera indices with shape `(N_cameras,)` - sorted in ascending order
+    </ResponseField>
+    
+    <ResponseField name="ego_history_xyz" type="torch.Tensor">
+      Historical ego positions in local frame with shape `(1, 1, num_history_steps, 3)`
+    </ResponseField>
+    
+    <ResponseField name="ego_history_rot" type="torch.Tensor">
+      Historical ego rotations as rotation matrices in local frame with shape `(1, 1, num_history_steps, 3, 3)`
+    </ResponseField>
+    
+    <ResponseField name="ego_future_xyz" type="torch.Tensor">
+      Future ego positions in local frame with shape `(1, 1, num_future_steps, 3)`
+    </ResponseField>
+    
+    <ResponseField name="ego_future_rot" type="torch.Tensor">
+      Future ego rotations as rotation matrices in local frame with shape `(1, 1, num_future_steps, 3, 3)`
+    </ResponseField>
+    
+    <ResponseField name="relative_timestamps" type="torch.Tensor">
+      Relative timestamps in seconds with shape `(N_cameras, num_frames)`
+    </ResponseField>
+    
+    <ResponseField name="absolute_timestamps" type="torch.Tensor">
+      Absolute timestamps in microseconds with shape `(N_cameras, num_frames)`
+    </ResponseField>
+    
+    <ResponseField name="t0_us" type="int">
+      The t0 timestamp used (in microseconds)
+    </ResponseField>
+    
+    <ResponseField name="clip_id" type="str">
+      The clip ID
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```python
+from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+import torch
+
+# Load dataset for a specific clip
+clip_id = "030c760c-ae38-49aa-9ad8-f5650a545d26"
+data = load_physical_aiavdataset(clip_id, t0_us=5_100_000)
+
+print(f"Image frames shape: {data['image_frames'].shape}")
+print(f"Camera indices: {data['camera_indices']}")
+print(f"Ego history XYZ shape: {data['ego_history_xyz'].shape}")
+print(f"Ego future XYZ shape: {data['ego_future_xyz'].shape}")
+```
+
+### Custom Camera Configuration
+
+```python
+import physical_ai_av
+
+avdi = physical_ai_av.PhysicalAIAVDatasetInterface()
+
+# Use custom camera features
+custom_cameras = [
+    avdi.features.CAMERA.CAMERA_FRONT_WIDE_120FOV,
+    avdi.features.CAMERA.CAMERA_REAR_TELE_30FOV,
+]
+
+data = load_physical_aiavdataset(
+    clip_id="030c760c-ae38-49aa-9ad8-f5650a545d26",
+    t0_us=5_100_000,
+    camera_features=custom_cameras,
+    num_frames=8,  # Load 8 frames per camera
+    num_history_steps=32,  # Use 3.2s of history
+)
+```
+
+### Trajectory Sampling
+
+The function samples trajectories at regular intervals:
+
+- **History**: `[t0 - (num_history_steps-1)*time_step, ..., t0-time_step, t0]`
+  - Default: 16 steps ending at t0 (1.6s of history at 10Hz)
+  
+- **Future**: `[t0 + time_step, t0 + 2*time_step, ..., t0 + num_future_steps*time_step]`
+  - Default: 64 steps starting after t0 (6.4s of future at 10Hz)
+
+- **Images**: `[t0 - (num_frames-1)*time_step, ..., t0-time_step, t0]`
+  - Default: 4 frames ending at t0 (0.4s of image history at 10Hz)
+
+All trajectories are transformed to the local ego frame at t0, where the ego pose at t0 is the origin.

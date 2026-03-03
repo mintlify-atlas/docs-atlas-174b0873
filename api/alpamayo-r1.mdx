@@ -1,0 +1,159 @@
+---
+title: AlpamayoR1
+description: Expert model for reasoning VLA with diffusion-based trajectory generation
+---
+
+## Class: AlpamayoR1
+
+The `AlpamayoR1` class is the main expert model for reasoning Vision-Language-Action tasks. It extends the `ReasoningVLA` base model with diffusion-based trajectory sampling capabilities.
+
+**Inherits from:** `ReasoningVLA`
+
+**Location:** `alpamayo_r1.models.alpamayo_r1.AlpamayoR1`
+
+### Constructor
+
+```python
+AlpamayoR1(
+    config: AlpamayoR1Config,
+    pretrained_modules: dict[str, torch.nn.Module] | None = None,
+    original_vocab_size: int | None = None,
+)
+```
+
+Initializes the AlpamayoR1 expert model with the specified configuration.
+
+<ParamField path="config" type="AlpamayoR1Config" required>
+  Configuration object containing all model settings including expert configuration, diffusion settings, and action space parameters.
+</ParamField>
+
+<ParamField path="pretrained_modules" type="dict[str, torch.nn.Module] | None" default="None">
+  Dictionary of pretrained PyTorch modules to use for initialization. Can include pre-loaded components like the VLM backbone.
+</ParamField>
+
+<ParamField path="original_vocab_size" type="int | None" default="None">
+  Original vocabulary size before adding trajectory tokens. Used when loading pretrained modules.
+</ParamField>
+
+### Methods
+
+#### sample_trajectories_from_data_with_vlm_rollout
+
+```python
+def sample_trajectories_from_data_with_vlm_rollout(
+    data: dict[str, Any],
+    top_p: float = 0.98,
+    top_k: int | None = None,
+    temperature: float = 0.6,
+    num_traj_samples: int = 6,
+    num_traj_sets: int = 1,
+    diffusion_kwargs: dict[str, Any] | None = None,
+    *args: Any,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, dict]
+```
+
+Sample trajectories from input data using VLM rollout followed by diffusion-based action generation.
+
+<ParamField path="data" type="dict[str, Any]" required>
+  Input data dictionary containing:
+  - `ego_history_xyz`: History positions tensor `[B, n_traj_group, T, 3]`
+  - `ego_history_rot`: History rotations tensor `[B, n_traj_group, T, ...]`
+  - `tokenized_data`: Tokenized input data including `input_ids`
+</ParamField>
+
+<ParamField path="top_p" type="float" default="0.98">
+  Nucleus sampling parameter. Only tokens with cumulative probability up to `top_p` are considered.
+</ParamField>
+
+<ParamField path="top_k" type="int | None" default="None">
+  Top-k sampling parameter. If specified, only the top k tokens are considered for sampling.
+</ParamField>
+
+<ParamField path="temperature" type="float" default="0.6">
+  Sampling temperature. Higher values increase randomness, lower values make sampling more deterministic.
+</ParamField>
+
+<ParamField path="num_traj_samples" type="int" default="6">
+  Number of trajectory samples to generate per input.
+</ParamField>
+
+<ParamField path="num_traj_sets" type="int" default="1">
+  Number of trajectory sets to generate.
+</ParamField>
+
+<ParamField path="diffusion_kwargs" type="dict[str, Any] | None" default="None">
+  Additional keyword arguments to pass to the diffusion sampling process.
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Additional keyword arguments:
+  - `max_generation_length`: Maximum length for VLM generation (default: `config.tokens_per_future_traj`)
+  - `return_extra`: If `True`, returns extracted text tokens in addition to trajectories
+</ParamField>
+
+<ResponseField name="pred_xyz" type="torch.Tensor">
+  Predicted trajectory positions with shape `[B, num_traj_sets, num_traj_samples, T, 3]`
+</ResponseField>
+
+<ResponseField name="pred_rot" type="torch.Tensor">
+  Predicted trajectory rotations with shape `[B, num_traj_sets, num_traj_samples, T, ...]`
+</ResponseField>
+
+<ResponseField name="extra" type="dict" condition="when return_extra=True">
+  Dictionary containing extracted text tokens from VLM generation, with shape `[B, num_traj_sets, num_traj_samples]`
+</ResponseField>
+
+### Example Usage
+
+```python
+import torch
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1.config import AlpamayoR1Config
+
+# Initialize configuration
+config = AlpamayoR1Config(
+    vlm_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+    diffusion_cfg={...},
+    action_space_cfg={...},
+)
+
+# Create model
+model = AlpamayoR1(config)
+
+# Prepare input data
+data = {
+    "ego_history_xyz": torch.randn(1, 1, 10, 3),
+    "ego_history_rot": torch.randn(1, 1, 10, 4),
+    "tokenized_data": {
+        "input_ids": torch.randint(0, 1000, (1, 100)),
+    }
+}
+
+# Sample trajectories
+pred_xyz, pred_rot = model.sample_trajectories_from_data_with_vlm_rollout(
+    data=data,
+    num_traj_samples=6,
+    temperature=0.7,
+)
+
+print(f"Predicted positions shape: {pred_xyz.shape}")
+print(f"Predicted rotations shape: {pred_rot.shape}")
+```
+
+### Internal Components
+
+The AlpamayoR1 model initializes the following internal components:
+
+- **expert**: Language model for processing trajectory embeddings (based on VLM text config)
+- **action_space**: Action space handler for trajectory encoding/decoding
+- **diffusion**: Diffusion model for trajectory sampling
+- **action_in_proj**: Projects noisy actions to expert token embeddings
+- **action_out_proj**: Projects expert hidden states to action predictions
+
+### Notes
+
+- The model uses a two-stage process: VLM autoregressive generation followed by diffusion-based trajectory sampling
+- During inference, only one trajectory group is supported (`n_traj_group == 1`)
+- The expert model masks out discrete trajectory tokens during chain-of-thought generation
+- KV cache from VLM generation is reused during expert model forward passes for efficiency

@@ -1,0 +1,92 @@
+---
+title: Introduction
+description: Alpamayo 1 is a 10B parameter Vision-Language-Action model for autonomous driving with Chain-of-Causation reasoning
+---
+
+# Alpamayo 1
+
+### Bridging reasoning and action prediction for generalizable autonomous driving
+
+Alpamayo 1 is an advanced AI/ML vision-language-action model designed for autonomous driving research. It combines Chain-of-Causation (CoC) reasoning with trajectory prediction to enable explainable and generalizable autonomous driving in complex scenarios.
+
+<Note>
+  Following the release of [NVIDIA Alpamayo](https://nvidianews.nvidia.com/news/alpamayo-autonomous-vehicle-development) at CES 2026, Alpamayo-R1 has been renamed to Alpamayo 1.
+</Note>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Chain-of-Causation reasoning" icon="brain">
+    Generates explainable reasoning traces that describe the causal factors influencing driving decisions
+  </Card>
+  <Card title="Vision-Language-Action architecture" icon="eye">
+    10B parameter model combining Cosmos-Reason backbone with specialized action expert
+  </Card>
+  <Card title="Long-horizon prediction" icon="route">
+    Predicts 6.4-second trajectory horizons with 64 waypoints at 10 Hz frequency
+  </Card>
+  <Card title="Multi-camera processing" icon="camera">
+    Processes multi-camera video inputs with egomotion history for comprehensive scene understanding
+  </Card>
+</CardGroup>
+
+## What is Chain-of-Causation?
+
+Chain-of-Causation (CoC) is a reasoning approach that generates natural language explanations of the causal factors affecting driving decisions. Unlike traditional black-box models, Alpamayo 1 produces both trajectory predictions and reasoning traces that explain why specific actions were chosen.
+
+## Model specifications
+
+| Specification | Details |
+|--------------|--------|
+| **Parameters** | 10 billion |
+| **Architecture** | Vision-Language-Action with Cosmos-Reason backbone |
+| **Prediction horizon** | 6.4 seconds |
+| **Waypoints** | 64 waypoints at 10 Hz |
+| **Input** | Multi-camera video + egomotion history |
+| **Output** | Trajectory predictions + reasoning traces |
+| **GPU requirement** | NVIDIA GPU with ≥24 GB VRAM |
+
+## Use cases
+
+Alpamayo 1 is designed for research and development in autonomous vehicles:
+
+- **End-to-end driving research**: Use as a backbone for autonomous driving experiments
+- **Reasoning-based auto-labeling**: Leverage CoC reasoning for dataset annotation
+- **Long-tail scenario evaluation**: Test model behavior in rare and complex driving situations
+- **Explainable AI research**: Study interpretable decision-making in autonomous systems
+
+<Warning>
+  Alpamayo 1 is a research tool for experimentation and evaluation only. It is **not** a production-ready driving stack and should not be deployed in real vehicles. The model is released under a non-commercial license.
+</Warning>
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up your environment and install Alpamayo 1
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run your first inference and generate trajectories
+  </Card>
+</CardGroup>
+
+## Research background
+
+Alpamayo 1 implements the architecture described in the paper [*"Alpamayo-R1: Bridging Reasoning and Action Prediction for Generalizable Autonomous Driving in the Long Tail"*](https://arxiv.org/abs/2511.00088). The model focuses on core supervised learning components, including:
+
+- Chain-of-Causation reasoning with hybrid auto-labeling
+- Vision-Language-Action architecture combining language understanding with trajectory prediction
+- 6.4-second horizon trajectory prediction at 10 Hz
+
+<Info>
+  The current release (v1.0) does not include RL post-training, route conditioning, or general VQA capabilities described in the paper. These features may be included in future releases.
+</Info>
+
+## License
+
+Alpamayo 1 is released with a dual license structure:
+
+- **Inference code**: Apache License 2.0
+- **Model weights**: Non-commercial license (research and evaluation only)
+
+For complete licensing details, see the [HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-R1-10B).

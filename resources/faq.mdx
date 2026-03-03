@@ -1,0 +1,26 @@
+---
+title: 'Frequently Asked Questions'
+description: 'Common questions about Alpamayo 1 capabilities and requirements'
+---
+
+<AccordionGroup>
+  <Accordion title="Does the 10B model accept navigation/route inputs?">
+    While we have experimented with route conditioning capabilities, the released model does **not** include this feature. The current release takes multi-camera video and egomotion history as inputs, without explicit navigation or route inputs (e.g., waypoints, turn-by-turn navigation instructions).
+  </Accordion>
+
+  <Accordion title="Does the model produce meta-actions or support general VQA?">
+    While we have experimented with meta-action and general VQA capabilities, the released model does **not** include these features. Alpamayo 1 is designed specifically for trajectory prediction with Chain-of-Causation reasoning, producing trajectory + reasoning trace outputs.
+  </Accordion>
+
+  <Accordion title="Was the 10B model post-trained with Reinforcement Learning (RL)?">
+    No. The current 10B model release has **not** undergone RL post-training. While the paper describes RL stages for improving reasoning quality and action consistency, this release focuses on the supervised learning components. As mentioned above, we may release RL post-trained models in future releases.
+  </Accordion>
+
+  <Accordion title="What are the minimum GPU requirements?">
+    You need an NVIDIA GPU with at least **24 GB VRAM** for inference. Tested configurations include RTX 3090, A100, and H100. Running on GPUs with less memory (e.g., 16 GB) will likely result in CUDA out-of-memory errors.
+  </Accordion>
+
+  <Accordion title="Can I use this model in production / commercial applications?">
+    No. The model weights are released under a **non-commercial license**. This release is intended for research, experimentation, and evaluation purposes only. See the [License](/resources/license) page and the [HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-R1-10B) for details.
+  </Accordion>
+</AccordionGroup>

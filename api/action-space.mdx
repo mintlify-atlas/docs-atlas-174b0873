@@ -1,0 +1,172 @@
+---
+title: ActionSpace
+description: Base class for action space implementations in trajectory generation
+---
+
+`ActionSpace` is an abstract base class that defines the interface for converting between trajectories and action spaces. All action space implementations must inherit from this class and implement its abstract methods.
+
+## Class Definition
+
+```python
+class ActionSpace(ABC, nn.Module)
+```
+
+Inherits from `torch.nn.Module` and `ABC` (Abstract Base Class).
+
+## Abstract Methods
+
+### traj_to_action
+
+Transforms a future trajectory into the action space representation.
+
+```python
+def traj_to_action(
+    self,
+    traj_history_xyz: torch.Tensor,
+    traj_history_rot: torch.Tensor,
+    traj_future_xyz: torch.Tensor,
+    traj_future_rot: torch.Tensor,
+    *args: Any,
+    **kwargs: Any,
+) -> torch.Tensor
+```
+
+<ParamField path="traj_history_xyz" type="torch.Tensor">
+  Historical trajectory positions with shape `(..., T, 3)`
+</ParamField>
+
+<ParamField path="traj_history_rot" type="torch.Tensor">
+  Historical trajectory rotations with shape `(..., T, 3, 3)`
+</ParamField>
+
+<ParamField path="traj_future_xyz" type="torch.Tensor">
+  Future trajectory positions with shape `(..., T, 3)`
+</ParamField>
+
+<ParamField path="traj_future_rot" type="torch.Tensor">
+  Future trajectory rotations with shape `(..., T, 3, 3)`
+</ParamField>
+
+<ParamField path="*args" type="Any">
+  Additional positional arguments for specific action space implementations
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Additional keyword arguments for specific action space implementations
+</ParamField>
+
+**Returns:** `torch.Tensor` with shape `(..., *action_space_dims)` representing the action in the action space
+
+### action_to_traj
+
+Transforms an action into trajectory representation.
+
+```python
+def action_to_traj(
+    self,
+    action: torch.Tensor,
+    traj_history_xyz: torch.Tensor,
+    traj_history_rot: torch.Tensor,
+    *args: Any,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, torch.Tensor]
+```
+
+<ParamField path="action" type="torch.Tensor">
+  Action tensor with shape `(..., *action_space_dims)`
+</ParamField>
+
+<ParamField path="traj_history_xyz" type="torch.Tensor">
+  Historical trajectory positions with shape `(..., T, 3)`
+</ParamField>
+
+<ParamField path="traj_history_rot" type="torch.Tensor">
+  Historical trajectory rotations with shape `(..., T, 3, 3)`
+</ParamField>
+
+<ParamField path="*args" type="Any">
+  Additional positional arguments for specific action space implementations
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Additional keyword arguments for specific action space implementations
+</ParamField>
+
+**Returns:** Tuple of `(traj_future_xyz, traj_future_rot)` where:
+- `traj_future_xyz` has shape `(..., T, 3)`
+- `traj_future_rot` has shape `(..., T, 3, 3)`
+
+### get_action_space_dims
+
+Returns the dimensions of the action space.
+
+```python
+def get_action_space_dims(self) -> tuple[int, ...]
+```
+
+**Returns:** `tuple[int, ...]` representing the action space dimensions
+
+## Methods
+
+### is_within_bounds
+
+Checks if an action is within valid bounds. The default implementation assumes all actions are valid.
+
+```python
+def is_within_bounds(self, action: torch.Tensor) -> torch.Tensor
+```
+
+<ParamField path="action" type="torch.Tensor">
+  Action tensor with shape `(..., *action_space_dims)`
+</ParamField>
+
+**Returns:** `torch.Tensor` with shape `(...)` containing boolean values indicating whether each action is within bounds
+
+<Note>
+  The default implementation returns `True` for all actions. Subclasses should override this method to implement specific boundary checking logic.
+</Note>
+
+## Usage Example
+
+```python
+from alpamayo_r1.action_space import ActionSpace
+import torch
+
+class CustomActionSpace(ActionSpace):
+    def __init__(self):
+        super().__init__()
+        self.action_dim = 4
+    
+    def get_action_space_dims(self) -> tuple[int, ...]:
+        return (self.action_dim,)
+    
+    def traj_to_action(
+        self,
+        traj_history_xyz: torch.Tensor,
+        traj_history_rot: torch.Tensor,
+        traj_future_xyz: torch.Tensor,
+        traj_future_rot: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        # Implement conversion logic
+        batch_shape = traj_future_xyz.shape[:-2]
+        return torch.zeros(*batch_shape, self.action_dim)
+    
+    def action_to_traj(
+        self,
+        action: torch.Tensor,
+        traj_history_xyz: torch.Tensor,
+        traj_history_rot: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Implement conversion logic
+        batch_shape = action.shape[:-1]
+        traj_xyz = torch.zeros(*batch_shape, 64, 3)
+        traj_rot = torch.eye(3).expand(*batch_shape, 64, 3, 3)
+        return traj_xyz, traj_rot
+
+# Create instance
+action_space = CustomActionSpace()
+```

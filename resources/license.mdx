@@ -1,0 +1,94 @@
+---
+title: 'License'
+description: 'Licensing information for Alpamayo 1'
+---
+
+## Dual Licensing Structure
+
+Alpamayo 1 uses a dual licensing structure that separates the inference code from the model weights:
+
+<CardGroup cols={2}>
+  <Card title="Inference Code" icon="code">
+    **Apache License 2.0**
+    
+    Open source license for all code in the repository
+  </Card>
+  <Card title="Model Weights" icon="brain">
+    **Non-Commercial License**
+    
+    Research and evaluation use only
+  </Card>
+</CardGroup>
+
+## Inference Code - Apache 2.0
+
+The inference code and all software in this repository are licensed under the Apache License 2.0. This is a permissive open source license that allows you to:
+
+- Use the code for any purpose
+- Distribute the code
+- Modify the code
+- Distribute modified versions
+- Use the code in proprietary software
+
+For the full license text, see the [LICENSE](https://github.com/NVlabs/alpamayo/blob/main/LICENSE) file in the repository.
+
+## Model Weights - Non-Commercial License
+
+<Warning>
+  The model weights are released under a **non-commercial license** and are intended for research, experimentation, and evaluation purposes only.
+</Warning>
+
+### What This Means
+
+- **Permitted Use**: Research, academic study, benchmarking, and experimentation
+- **Prohibited Use**: Production deployments, commercial applications, and revenue-generating services
+
+### Accessing the Model
+
+The Alpamayo 1 model weights are hosted on HuggingFace and require access approval:
+
+<Card title="HuggingFace Model Card" icon="hugging-face" href="https://huggingface.co/nvidia/Alpamayo-R1-10B">
+  View the complete licensing terms and request access to the model weights
+</Card>
+
+For complete details on the model weights license, please refer to the [HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-R1-10B).
+
+## Important Disclaimers
+
+<Note>
+  Alpamayo 1 is a pre-trained reasoning model designed to accelerate research and development in the autonomous vehicle (AV) domain. It is intended to serve as a foundation for a range of AV-related use cases—from instantiating an end-to-end backbone for autonomous driving to enabling reasoning-based auto-labeling tools. In short, it should be viewed as a building block for developing customized AV applications.
+</Note>
+
+### Research Tool Only
+
+Alpamayo 1 is provided solely for **research, experimentation, and evaluation purposes**.
+
+### Not a Complete Driving Stack
+
+<Warning>
+  Alpamayo 1 is **not** a fully fledged driving stack. Among other limitations, it:
+  
+  - Lacks access to critical real-world sensor inputs
+  - Does not incorporate required diverse and redundant safety mechanisms
+  - Has not undergone automotive-grade validation for deployment
+</Warning>
+
+By using this model, you acknowledge that it is a research tool intended to support scientific inquiry, benchmarking, and exploration—not a substitute for a certified AV stack. The developers and contributors disclaim any responsibility or liability for the use of the model or its outputs.
+
+## Copyright Notice
+
+```
+Copyright 2025 NVIDIA
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```

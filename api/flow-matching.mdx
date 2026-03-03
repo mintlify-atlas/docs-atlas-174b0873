@@ -1,0 +1,230 @@
+---
+title: FlowMatching
+description: Flow matching diffusion model for generative modeling
+---
+
+## Overview
+
+`FlowMatching` is a diffusion model implementation based on flow matching for generative modeling. It uses continuous normalizing flows to transform noise into data samples through learned vector fields.
+
+## References
+
+- [Flow Matching for Generative Modeling](https://arxiv.org/pdf/2210.02747)
+- [Guided Flows for Generative Modeling and Decision Making](https://arxiv.org/pdf/2311.13443)
+
+## Class Definition
+
+```python
+from alpamayo_r1.diffusion.flow_matching import FlowMatching
+```
+
+## Constructor
+
+```python
+FlowMatching(
+    int_method: Literal["euler"] = "euler",
+    num_inference_steps: int = 10,
+    x_dims: list[int] | tuple[int] | int = ...,
+    *args,
+    **kwargs,
+)
+```
+
+<ParamField path="int_method" type="Literal['euler']" default="euler">
+  The integration method used during inference. Currently only "euler" (Euler integration) is supported.
+</ParamField>
+
+<ParamField path="num_inference_steps" type="int" default="10">
+  The number of inference steps to use when sampling. More steps generally produce higher quality samples but take longer.
+</ParamField>
+
+<ParamField path="x_dims" type="list[int] | tuple[int] | int" required>
+  The dimension of the input tensor. Inherited from [BaseDiffusion](/api/diffusion-base). Can be a single integer or a sequence of integers defining the shape.
+</ParamField>
+
+### Example
+
+```python
+from alpamayo_r1.diffusion.flow_matching import FlowMatching
+
+# Create flow matching model for 128-dimensional vectors
+diffusion = FlowMatching(
+    x_dims=128,
+    num_inference_steps=20,
+    int_method="euler"
+)
+
+# Create flow matching model for images
+image_diffusion = FlowMatching(
+    x_dims=[64, 64, 3],  # 64x64 RGB images
+    num_inference_steps=50
+)
+```
+
+## Methods
+
+### sample
+
+```python
+@torch.no_grad()
+def sample(
+    batch_size: int,
+    step_fn: StepFn,
+    device: torch.device = torch.device("cpu"),
+    return_all_steps: bool = False,
+    inference_step: int | None = None,
+    int_method: Literal["euler"] | None = None,
+    *args,
+    **kwargs,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+```
+
+Sample data from the flow matching model using the specified integration method.
+
+<ParamField path="batch_size" type="int" required>
+  The number of samples to generate in parallel.
+</ParamField>
+
+<ParamField path="step_fn" type="StepFn" required>
+  The denoising step function that predicts the vector field. Should take keyword arguments `x` (current state) and `t` (timestep) and return the predicted vector field.
+  
+  See [StepFn Protocol](/api/diffusion-base#stepfn-protocol) for details.
+</ParamField>
+
+<ParamField path="device" type="torch.device" default="torch.device('cpu')">
+  The PyTorch device to use for sampling (e.g., "cpu", "cuda").
+</ParamField>
+
+<ParamField path="return_all_steps" type="bool" default="False">
+  Whether to return the outputs from all intermediate sampling steps.
+</ParamField>
+
+<ParamField path="inference_step" type="int | None" default="None">
+  The number of inference steps to use. If provided, this overrides `self.num_inference_steps` for this sampling call.
+</ParamField>
+
+<ParamField path="int_method" type="Literal['euler'] | None" default="None">
+  The integration method to use. If provided, this overrides `self.int_method` for this sampling call.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="output" type="torch.Tensor | tuple[torch.Tensor, torch.Tensor]">
+  If `return_all_steps=False`: Returns the final sampled tensor with shape `[B, *x_dims]` where B is the batch size.
+  
+  If `return_all_steps=True`: Returns a tuple of:
+  - All sampled tensors with shape `[B, T+1, *x_dims]` where T is the number of inference steps (includes initial noise)
+  - The time steps with shape `[T+1]` ranging from 0.0 to 1.0
+</ResponseField>
+
+## Flow Matching Sampling Process
+
+Flow matching generates samples by:
+
+1. **Initialize**: Start with random noise `x ~ N(0, I)` at time `t=0`
+2. **Integrate**: Use Euler integration to follow the learned vector field from `t=0` to `t=1`:
+   - At each step: `x = x + dt * v(x, t)` where `v` is the predicted vector field from `step_fn`
+   - Time steps are linearly spaced: `[0.0, 1/T, 2/T, ..., 1.0]`
+3. **Output**: Return the final state `x` at `t=1`, which should resemble the target distribution
+
+The model learns to predict the vector field that transports samples from the noise distribution to the data distribution.
+
+## Usage Example
+
+```python
+import torch
+from alpamayo_r1.diffusion.flow_matching import FlowMatching
+
+# Initialize flow matching model
+diffusion = FlowMatching(
+    x_dims=[32, 32, 3],  # 32x32 RGB images
+    num_inference_steps=25,
+    int_method="euler"
+)
+
+# Define step function that wraps your trained model
+def step_fn(*, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    # Your model predicts the vector field v(x, t)
+    return trained_model(x, t)
+
+# Generate samples
+samples = diffusion.sample(
+    batch_size=8,
+    step_fn=step_fn,
+    device=torch.device("cuda")
+)
+
+print(samples.shape)  # [8, 32, 32, 3]
+
+# Generate with custom number of steps
+high_quality_samples = diffusion.sample(
+    batch_size=8,
+    step_fn=step_fn,
+    device=torch.device("cuda"),
+    inference_step=100  # Override default 25 steps
+)
+
+# Get all intermediate steps for visualization
+all_steps, timesteps = diffusion.sample(
+    batch_size=4,
+    step_fn=step_fn,
+    device=torch.device("cuda"),
+    return_all_steps=True
+)
+
+print(all_steps.shape)  # [4, 26, 32, 32, 3] (25 steps + initial noise)
+print(timesteps.shape)  # [26]
+
+# Visualize the generation process
+import matplotlib.pyplot as plt
+for i, t in enumerate(timesteps[::5]):  # Show every 5th step
+    plt.subplot(1, 6, i + 1)
+    plt.imshow(all_steps[0, i*5].cpu())
+    plt.title(f"t={t:.2f}")
+    plt.axis('off')
+plt.show()
+```
+
+## Advanced Usage
+
+### Adaptive Step Sizes
+
+You can dynamically adjust the number of inference steps based on quality requirements:
+
+```python
+# Fast sampling for preview
+preview = diffusion.sample(
+    batch_size=1,
+    step_fn=step_fn,
+    device=device,
+    inference_step=10
+)
+
+# High quality sampling for final output
+final = diffusion.sample(
+    batch_size=1,
+    step_fn=step_fn,
+    device=device,
+    inference_step=100
+)
+```
+
+### Conditional Generation
+
+Extend the step function to support conditional generation:
+
+```python
+def conditional_step_fn(*, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    # Include conditioning information in your model
+    return trained_model(x, t, condition=class_label)
+
+conditional_samples = diffusion.sample(
+    batch_size=8,
+    step_fn=conditional_step_fn,
+    device=device
+)
+```
+
+## See Also
+
+- [BaseDiffusion](/api/diffusion-base) - Base class documentation

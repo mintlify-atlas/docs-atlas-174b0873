@@ -1,0 +1,340 @@
+---
+title: Interactive Notebook Tutorial
+description: Learn to use Alpamayo 1 with the interactive Jupyter notebook
+---
+
+This guide walks you through using the interactive notebook to run inference, visualize results, and analyze trajectory predictions with Alpamayo 1.
+
+## Overview
+
+The notebook at `notebooks/inference.ipynb` provides an interactive environment for:
+
+- Loading and visualizing multi-camera driving scenes
+- Running model inference with customizable parameters
+- Plotting predicted vs. ground truth trajectories
+- Analyzing Chain-of-Causation reasoning traces
+- Computing evaluation metrics (minADE)
+
+## Getting Started
+
+<Steps>
+  <Step title="Launch Jupyter">
+    Start Jupyter Lab or Notebook from your activated environment:
+    
+    ```bash
+    jupyter lab
+    ```
+    
+    Or if you prefer the classic interface:
+    
+    ```bash
+    jupyter notebook
+    ```
+  </Step>
+
+  <Step title="Open the notebook">
+    Navigate to and open `notebooks/inference.ipynb`
+  </Step>
+
+  <Step title="Run the cells sequentially">
+    Execute each cell in order to load the model, run inference, and visualize results
+  </Step>
+</Steps>
+
+## Notebook Walkthrough
+
+### Cell 1: Import Dependencies
+
+The notebook starts by importing required libraries:
+
+```python
+import copy
+import numpy as np
+import mediapy as mp
+import pandas as pd
+
+import torch
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+from alpamayo_r1 import helper
+```
+
+Key libraries:
+- `torch`: PyTorch for model loading and inference
+- `mediapy`: For displaying multi-camera images
+- `pandas`: For loading clip IDs
+- `matplotlib`: For trajectory visualization
+
+### Cell 2: Load Model and Processor
+
+```python
+model = AlpamayoR1.from_pretrained(
+    "nvidia/Alpamayo-R1-10B", 
+    dtype=torch.bfloat16
+).to("cuda")
+
+processor = helper.get_processor(model.tokenizer)
+```
+
+<Note>
+This cell downloads the model weights (22 GB) on first run. The download is cached for future use.
+</Note>
+
+### Cell 3: Load and Prepare Data
+
+Load a driving scene from the PhysicalAI-AV dataset:
+
+```python
+clip_ids = pd.read_parquet("clip_ids.parquet")["clip_id"].tolist()
+clip_id = clip_ids[774]
+# clip_id = '030c760c-ae38-49aa-9ad8-f5650a545d26'
+
+data = load_physical_aiavdataset(clip_id)
+
+messages = helper.create_message(data["image_frames"].flatten(0, 1))
+
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    add_generation_prompt=False,
+    continue_final_message=True,
+    return_dict=True,
+    return_tensors="pt",
+)
+print("seq length:", inputs.input_ids.shape)
+model_inputs = {
+    "tokenized_data": inputs,
+    "ego_history_xyz": data["ego_history_xyz"],
+    "ego_history_rot": data["ego_history_rot"],
+}
+model_inputs = helper.to_device(model_inputs, "cuda")
+```
+
+<Accordion title="Customizing the Clip ID">
+  You can select different driving scenarios by:
+  - Using a specific clip ID: `clip_id = "030c760c-ae38-49aa-9ad8-f5650a545d26"`
+  - Choosing from the parquet file: `clip_id = clip_ids[INDEX]`
+  - The parquet file contains curated clip IDs from the dataset
+</Accordion>
+
+### Cell 4: Run Model Inference
+
+Generate trajectory predictions with reasoning:
+
+```python
+torch.cuda.manual_seed_all(42)
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=copy.deepcopy(model_inputs),
+        top_p=0.98,
+        temperature=0.6,
+        num_traj_samples=1,  # Feel free to raise this for more output trajectories and CoC traces.
+        max_generation_length=256,
+        return_extra=True,
+    )
+
+# the size is [batch_size, num_traj_sets, num_traj_samples]
+print("Chain-of-Causation (per trajectory):\n", extra["cot"][0])
+```
+
+<Note>
+The notebook uses `copy.deepcopy(model_inputs)` to preserve the original inputs for potential re-runs with different parameters.
+</Note>
+
+**Experiment with Parameters:**
+
+<CodeGroup>
+```python Conservative Sampling
+# More deterministic, focused predictions
+pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+    data=copy.deepcopy(model_inputs),
+    top_p=0.90,
+    temperature=0.4,
+    num_traj_samples=1,
+    max_generation_length=256,
+    return_extra=True,
+)
+```
+
+```python Diverse Sampling
+# More diverse, exploratory predictions
+pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+    data=copy.deepcopy(model_inputs),
+    top_p=0.98,
+    temperature=0.8,
+    num_traj_samples=5,
+    max_generation_length=256,
+    return_extra=True,
+)
+```
+</CodeGroup>
+
+## Visualizing Results
+
+### Cell 5: Display Multi-Camera Images
+
+Visualize the input camera frames:
+
+```python
+mp.show_images(
+    data["image_frames"].flatten(0, 1).permute(0, 2, 3, 1), 
+    columns=4, 
+    width=200
+)
+```
+
+This displays all camera views (4 cameras × 4 frames = 16 images) in a grid, showing the temporal and spatial context the model uses for prediction.
+
+### Cell 6: Plot Trajectory Predictions
+
+Visualize predicted trajectories against ground truth:
+
+```python
+import matplotlib.pyplot as plt
+
+def rotate_90cc(xy):
+    # Rotate (x, y) by 90 deg CCW -> (y, -x)
+    return np.stack([-xy[1], xy[0]], axis=0)
+
+for i in range(pred_xyz.shape[2]):
+    pred_xy = pred_xyz.cpu()[0, 0, i, :, :2].T.numpy()
+    pred_xy_rot = rotate_90cc(pred_xy)
+    gt_xy = data["ego_future_xyz"].cpu()[0, 0, :, :2].T.numpy()
+    gt_xy_rot = rotate_90cc(gt_xy)
+    plt.plot(*pred_xy_rot, "o-", label=f"Predicted Trajectory #{i + 1}")
+    
+plt.ylabel("y coordinate (meters)")
+plt.xlabel("x coordinate (meters)")
+plt.plot(*gt_xy_rot, "r-", label="Ground Truth Trajectory")
+plt.legend(loc="best")
+plt.axis("equal")
+```
+
+<Accordion title="Why the 90° Rotation?">
+  The `rotate_90cc` function rotates the trajectory coordinates by 90 degrees counter-clockwise for better visualization. This transforms the vehicle coordinate system to a more intuitive top-down view where:
+  - Forward motion appears as upward movement on the plot
+  - The trajectory is easier to interpret visually
+</Accordion>
+
+### Cell 7: Compute Evaluation Metrics
+
+Calculate the minimum Average Displacement Error:
+
+```python
+pred_xy = pred_xyz.cpu().numpy()[0, 0, :, :, :2].transpose(0, 2, 1)
+diff = np.linalg.norm(pred_xy - gt_xy[None, ...], axis=1).mean(-1)
+print("minADE:", diff.min(), "meters")
+```
+
+The minADE metric:
+- Measures average distance between predicted and ground truth waypoints
+- Lower values indicate better trajectory accuracy
+- Typical values range from 0.5 to 3.0 meters depending on scene complexity
+
+## Advanced Usage
+
+### Analyzing Multiple Scenarios
+
+Loop through multiple clips to analyze model performance:
+
+```python
+clip_ids = pd.read_parquet("clip_ids.parquet")["clip_id"].tolist()
+results = []
+
+for clip_id in clip_ids[:10]:  # Analyze first 10 clips
+    data = load_physical_aiavdataset(clip_id)
+    messages = helper.create_message(data["image_frames"].flatten(0, 1))
+    
+    # ... prepare inputs and run inference ...
+    
+    # Compute metrics
+    gt_xy = data["ego_future_xyz"].cpu()[0, 0, :, :2].T.numpy()
+    pred_xy = pred_xyz.cpu().numpy()[0, 0, :, :, :2].transpose(0, 2, 1)
+    diff = np.linalg.norm(pred_xy - gt_xy[None, ...], axis=1).mean(-1)
+    min_ade = diff.min()
+    
+    results.append({
+        "clip_id": clip_id,
+        "minADE": min_ade,
+        "reasoning": extra["cot"][0]
+    })
+
+# Analyze results
+results_df = pd.DataFrame(results)
+print(f"Average minADE: {results_df['minADE'].mean():.2f} meters")
+```
+
+### Comparing Different Sampling Strategies
+
+Test how different parameters affect predictions:
+
+```python
+sampling_configs = [
+    {"top_p": 0.90, "temperature": 0.4, "name": "Conservative"},
+    {"top_p": 0.95, "temperature": 0.6, "name": "Balanced"},
+    {"top_p": 0.98, "temperature": 0.8, "name": "Diverse"},
+]
+
+for config in sampling_configs:
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=copy.deepcopy(model_inputs),
+        top_p=config["top_p"],
+        temperature=config["temperature"],
+        num_traj_samples=5,
+        max_generation_length=256,
+        return_extra=True,
+    )
+    
+    # Compute and compare metrics
+    pred_xy = pred_xyz.cpu().numpy()[0, 0, :, :, :2].transpose(0, 2, 1)
+    diff = np.linalg.norm(pred_xy - gt_xy[None, ...], axis=1).mean(-1)
+    print(f"{config['name']}: minADE = {diff.min():.2f}m, mean ADE = {diff.mean():.2f}m")
+```
+
+## Tips for Effective Use
+
+<AccordionGroup>
+  <Accordion title="Memory Management">
+    - Clear GPU memory between runs: `torch.cuda.empty_cache()`
+    - Use `num_traj_samples=1` for initial experiments
+    - Restart the kernel if you encounter OOM errors
+  </Accordion>
+
+  <Accordion title="Reproducibility">
+    - Set random seeds for consistent results: `torch.cuda.manual_seed_all(42)`
+    - Note that exact numerical reproducibility is not guaranteed across different GPU architectures
+    - Save model outputs for later analysis
+  </Accordion>
+
+  <Accordion title="Performance Optimization">
+    - Batch multiple clips together for faster processing
+    - Cache loaded models to avoid reloading
+    - Use `torch.autocast` for efficient mixed-precision inference
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+If you encounter issues while running the notebook:
+
+<CardGroup cols={2}>
+  <Card title="CUDA OOM Errors" icon="memory">
+    Reduce `num_traj_samples` or restart the kernel to clear GPU memory
+  </Card>
+  <Card title="Import Errors" icon="code">
+    Ensure your environment is activated and all dependencies are installed
+  </Card>
+  <Card title="Dataset Access" icon="lock">
+    Verify HuggingFace authentication and dataset access approval
+  </Card>
+  <Card title="Common Issues" icon="wrench" href="/guides/troubleshooting">
+    See the full troubleshooting guide for detailed solutions
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+- Experiment with different clip IDs to see diverse driving scenarios
+- Adjust sampling parameters to explore prediction diversity
+- Analyze Chain-of-Causation reasoning to understand model decisions
+- Compare predictions across multiple scenarios for performance evaluation

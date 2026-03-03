@@ -1,0 +1,234 @@
+---
+title: Action Space
+description: Converting between action representations and vehicle trajectories
+---
+
+The action space system in Alpamayo R1 provides a flexible framework for converting between compact action representations and full vehicle trajectories. This is critical for autonomous driving, where models need to predict future vehicle motion efficiently.
+
+## Overview
+
+The action space abstraction serves two primary purposes:
+
+1. **Dimensionality reduction**: Convert high-dimensional trajectory sequences (positions and rotations over time) into compact action representations
+2. **Physical constraints**: Encode vehicle dynamics and kinematic constraints into the action space
+
+All action spaces inherit from the `ActionSpace` base class and implement bidirectional transformations between trajectories and actions.
+
+## Base Action Space Interface
+
+The `ActionSpace` class defines the core interface:
+
+```python
+class ActionSpace(ABC, nn.Module):
+    """Action space base class for the trajectory generation."""
+    
+    @abstractmethod
+    def traj_to_action(
+        self,
+        traj_history_xyz: torch.Tensor,  # (..., T, 3)
+        traj_history_rot: torch.Tensor,  # (..., T, 3, 3)
+        traj_future_xyz: torch.Tensor,   # (..., T, 3)
+        traj_future_rot: torch.Tensor,   # (..., T, 3, 3)
+    ) -> torch.Tensor:
+        """Transform the future trajectory to the action space."""
+    
+    @abstractmethod
+    def action_to_traj(
+        self,
+        action: torch.Tensor,            # (..., *action_space_dims)
+        traj_history_xyz: torch.Tensor,  # (..., T, 3)
+        traj_history_rot: torch.Tensor,  # (..., T, 3, 3)
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Transform the action space to the trajectory."""
+```
+
+See `action_space.py:23-95` for the complete base class implementation.
+
+## Unicycle Kinematic Model
+
+The `UnicycleAccelCurvatureActionSpace` is the primary action space implementation, modeling the vehicle as a unicycle with acceleration and curvature controls.
+
+### Action Representation
+
+Each action is a sequence of `(acceleration, curvature)` pairs:
+
+- **Acceleration** (`a`): Rate of change of velocity in m/s²
+- **Curvature** (`κ`): Inverse of the turning radius, controlling steering
+
+For `n_waypoints` future timesteps, the action has shape `(n_waypoints, 2)`.
+
+### Trajectory to Action Conversion
+
+The `traj_to_action` method extracts control parameters from a given trajectory:
+
+```python
+# Example from unicycle_accel_curvature.py:227-298
+def traj_to_action(
+    self,
+    traj_history_xyz: torch.Tensor,
+    traj_history_rot: torch.Tensor,
+    traj_future_xyz: torch.Tensor,
+    traj_future_rot: torch.Tensor,
+    t0_states: dict[str, torch.Tensor] | None = None,
+) -> torch.Tensor:
+    # 1. Extract heading angles from rotation matrices
+    theta = theta_smooth(traj_future_rot, ...)
+    
+    # 2. Compute velocities from positions
+    v = dxy_theta_to_v(dxy, theta, v0, ...)
+    
+    # 3. Extract acceleration from velocity profile
+    accel = self._v_to_a(v)
+    
+    # 4. Compute curvature from heading changes
+    kappa = self._theta_v_a_to_kappa(theta, v, accel)
+    
+    # 5. Normalize and stack
+    return torch.stack([accel, kappa], dim=-1)
+```
+
+Key implementation details from `unicycle_accel_curvature.py:128-205`:
+
+- **Velocity estimation**: Solves a regularized optimization problem to compute smooth velocity profiles
+- **Acceleration extraction**: Uses Tikhonov regularization to ensure smooth jerk (derivative of acceleration)
+- **Curvature computation**: Calculated as `dθ/s` where `s` is the arc length
+
+### Action to Trajectory Conversion
+
+The `action_to_traj` method simulates forward dynamics:
+
+```python
+# Simplified from unicycle_accel_curvature.py:300-382
+def action_to_traj(
+    self,
+    action: torch.Tensor,
+    traj_history_xyz: torch.Tensor,
+    traj_history_rot: torch.Tensor,
+    t0_states: dict[str, torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    accel, kappa = action[..., 0], action[..., 1]
+    
+    # Denormalize controls
+    accel = accel * accel_std + accel_mean
+    kappa = kappa * kappa_std + kappa_mean
+    
+    # Integrate velocity: v(t) = v₀ + ∫a dt
+    velocity = v0 + torch.cumsum(accel * dt, dim=-1)
+    
+    # Integrate heading: θ(t) = θ₀ + ∫κv dt
+    theta = torch.cumsum(kappa * velocity * dt, dim=-1)
+    
+    # Integrate position using trapezoidal rule
+    x = torch.cumsum(velocity * torch.cos(theta) * dt/2, dim=-1)
+    y = torch.cumsum(velocity * torch.sin(theta) * dt/2, dim=-1)
+    
+    return traj_future_xyz, traj_future_rot
+```
+
+The integration uses the unicycle kinematic equations:
+
+- `dx/dt = v cos(θ)`
+- `dy/dt = v sin(θ)`
+- `dv/dt = a`
+- `dθ/dt = κv`
+
+### Configuration
+
+Key parameters for `UnicycleAccelCurvatureActionSpace`:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `dt` | 0.1 | Time step between waypoints (seconds) |
+| `n_waypoints` | 64 | Number of future waypoints to predict |
+| `accel_bounds` | (-9.8, 9.8) | Min/max acceleration in m/s² |
+| `curvature_bounds` | (-0.2, 0.2) | Min/max curvature in 1/m |
+| `accel_mean`, `accel_std` | 0.0, 1.0 | Normalization parameters |
+| `curvature_mean`, `curvature_std` | 0.0, 1.0 | Normalization parameters |
+
+Regularization parameters control smoothness:
+
+- `theta_lambda`, `theta_ridge`: Heading smoothness
+- `v_lambda`, `v_ridge`: Velocity smoothness  
+- `a_lambda`, `a_ridge`: Acceleration smoothness (jerk)
+- `kappa_lambda`, `kappa_ridge`: Curvature smoothness
+
+See `unicycle_accel_curvature.py:36-96` for the full initialization.
+
+## Discrete Action Space
+
+The `DiscreteTrajectoryTokenizer` quantizes continuous actions into discrete tokens for use with language models or discrete diffusion:
+
+```python
+from discrete_action_space import DiscreteTrajectoryTokenizer
+
+tokenizer = DiscreteTrajectoryTokenizer(
+    action_space_cfg={...},
+    dims_min=[-10.0, -0.3],  # Min values for [accel, curvature]
+    dims_max=[10.0, 0.3],    # Max values
+    num_bins=256,            # Vocabulary size
+)
+
+# Encode trajectories to discrete tokens
+tokens = tokenizer.encode(
+    hist_xyz, hist_rot,
+    fut_xyz, fut_rot
+)  # Shape: (B, n_waypoints * 2)
+
+# Decode tokens back to trajectories
+fut_xyz, fut_rot, _ = tokenizer.decode(
+    hist_xyz, hist_rot, tokens
+)
+```
+
+The tokenizer performs uniform quantization:
+
+1. Convert trajectory to continuous action using the underlying action space
+2. Normalize to [0, 1] using `dims_min` and `dims_max`
+3. Quantize to `{0, 1, ..., num_bins-1}`
+4. Decode by reversing the process
+
+See `discrete_action_space.py:24-109` for implementation details.
+
+## Bounds Checking
+
+Action spaces can validate that actions satisfy physical constraints:
+
+```python
+action_space = UnicycleAccelCurvatureActionSpace(
+    accel_bounds=(-9.8, 9.8),
+    curvature_bounds=(-0.2, 0.2),
+)
+
+is_valid = action_space.is_within_bounds(action)
+# Returns: (...,) boolean tensor
+```
+
+This is useful for filtering invalid samples during inference. See `unicycle_accel_curvature.py:102-123`.
+
+## Best Practices
+
+1. **Normalization**: Always normalize acceleration and curvature using dataset statistics for stable training
+2. **Regularization**: Tune lambda parameters based on your application's smoothness requirements
+3. **Time discretization**: Choose `dt` to match your sensor update rate (typically 10-100 Hz)
+4. **Bounds**: Set conservative bounds to ensure physical realizability
+5. **Initial state**: Use `estimate_t0_states()` to infer initial velocity from history when not available
+
+## Integration with Diffusion Models
+
+Action spaces are designed to work seamlessly with diffusion models:
+
+```python
+# Training: Convert ground truth trajectories to actions
+action = action_space.traj_to_action(
+    hist_xyz, hist_rot,
+    fut_xyz, fut_rot
+)
+
+# Inference: Sample actions from diffusion, convert to trajectories
+sampled_action = diffusion_model.sample(...)  # See diffusion.mdx
+fut_xyz, fut_rot = action_space.action_to_traj(
+    sampled_action, hist_xyz, hist_rot
+)
+```
+
+The compact action representation enables efficient diffusion modeling while maintaining kinematic consistency.

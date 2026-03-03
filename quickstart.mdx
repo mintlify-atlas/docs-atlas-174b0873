@@ -1,80 +1,320 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Run your first Alpamayo 1 inference and generate trajectory predictions with Chain-of-Causation reasoning
 ---
 
-## Get started in three steps
+# Quickstart
 
-Get your documentation site running locally and make your first customization.
+This guide shows you how to run inference with Alpamayo 1 and generate trajectory predictions with Chain-of-Causation reasoning.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Before starting, ensure you have:
+
+- Completed the [installation](/installation) steps
+- Activated your virtual environment
+- Authenticated with HuggingFace
+- An NVIDIA GPU with ≥24 GB VRAM
+
+## Run the test inference script
+
+The simplest way to get started is using the provided test script:
+
+```bash
+python src/alpamayo_r1/test_inference.py
+```
+
+<Note>
+  The first run will download example data and model weights (22 GB). Subsequent runs will use cached weights.
+</Note>
+
+This script will:
+1. Load a sample clip from the PhysicalAI-AV dataset
+2. Run inference to predict trajectories
+3. Generate Chain-of-Causation reasoning traces
+4. Compute the minADE (minimum Average Displacement Error) metric
+
+## Understanding the code
+
+Here's how the inference pipeline works:
+
+<Steps>
+  <Step title="Load the dataset">
+    Load a specific clip from the PhysicalAI-AV dataset:
+
+    ```python
+    from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+
+    clip_id = "030c760c-ae38-49aa-9ad8-f5650a545d26"
+    data = load_physical_aiavdataset(clip_id, t0_us=5_100_000)
+    ```
+
+    The dataset includes multi-camera images, ego vehicle history (position and rotation), and ground truth trajectories.
+  </Step>
+
+  <Step title="Load the model and processor">
+    Load the pre-trained Alpamayo 1 model:
+
+    ```python
+    import torch
+    from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+    from alpamayo_r1 import helper
+
+    model = AlpamayoR1.from_pretrained(
+        "nvidia/Alpamayo-R1-10B", 
+        dtype=torch.bfloat16
+    ).to("cuda")
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    processor = helper.get_processor(model.tokenizer)
+    ```
+
+    The model uses bfloat16 precision for efficient GPU memory usage.
+  </Step>
+
+  <Step title="Prepare the inputs">
+    Create message format and tokenize inputs:
+
+    ```python
+    messages = helper.create_message(data["image_frames"].flatten(0, 1))
+
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=False,
+        continue_final_message=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+
+    model_inputs = {
+        "tokenized_data": inputs,
+        "ego_history_xyz": data["ego_history_xyz"],
+        "ego_history_rot": data["ego_history_rot"],
+    }
+    model_inputs = helper.to_device(model_inputs, "cuda")
+    ```
+  </Step>
+
+  <Step title="Run inference">
+    Generate trajectory predictions with Chain-of-Causation reasoning:
+
+    ```python
+    torch.cuda.manual_seed_all(42)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+            data=model_inputs,
+            top_p=0.98,
+            temperature=0.6,
+            num_traj_samples=1,
+            max_generation_length=256,
+            return_extra=True,
+        )
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    # View Chain-of-Causation reasoning
+    print("Chain-of-Causation (per trajectory):\n", extra["cot"][0])
+    ```
 
-### Step 2: Deploy your changes
+    <Info>
+      You can increase `num_traj_samples` to generate multiple trajectory hypotheses, but this requires more GPU memory.
+    </Info>
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+  <Step title="Evaluate predictions">
+    Compare predictions against ground truth:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```python
+    import numpy as np
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    gt_xy = data["ego_future_xyz"].cpu()[0, 0, :, :2].T.numpy()
+    pred_xy = pred_xyz.cpu().numpy()[0, 0, :, :, :2].transpose(0, 2, 1)
+    diff = np.linalg.norm(pred_xy - gt_xy[None, ...], axis=1).mean(-1)
+    min_ade = diff.min()
+    print("minADE:", min_ade, "meters")
+    ```
 
-### Step 3: Go live
+    The minADE (minimum Average Displacement Error) measures the average distance between the best predicted trajectory and ground truth.
+  </Step>
+</Steps>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+## Complete example
+
+Here's the full inference script:
+
+<CodeGroup>
+
+```python test_inference.py
+import torch
+import numpy as np
+
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+from alpamayo_r1 import helper
+
+# Load dataset
+clip_id = "030c760c-ae38-49aa-9ad8-f5650a545d26"
+print(f"Loading dataset for clip_id: {clip_id}...")
+data = load_physical_aiavdataset(clip_id, t0_us=5_100_000)
+print("Dataset loaded.")
+messages = helper.create_message(data["image_frames"].flatten(0, 1))
+
+# Load model and processor
+model = AlpamayoR1.from_pretrained("nvidia/Alpamayo-R1-10B", dtype=torch.bfloat16).to("cuda")
+processor = helper.get_processor(model.tokenizer)
+
+# Prepare inputs
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    add_generation_prompt=False,
+    continue_final_message=True,
+    return_dict=True,
+    return_tensors="pt",
+)
+model_inputs = {
+    "tokenized_data": inputs,
+    "ego_history_xyz": data["ego_history_xyz"],
+    "ego_history_rot": data["ego_history_rot"],
+}
+model_inputs = helper.to_device(model_inputs, "cuda")
+
+# Run inference
+torch.cuda.manual_seed_all(42)
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=model_inputs,
+        top_p=0.98,
+        temperature=0.6,
+        num_traj_samples=1,
+        max_generation_length=256,
+        return_extra=True,
+    )
+
+# View reasoning and metrics
+print("Chain-of-Causation (per trajectory):\n", extra["cot"][0])
+
+gt_xy = data["ego_future_xyz"].cpu()[0, 0, :, :2].T.numpy()
+pred_xy = pred_xyz.cpu().numpy()[0, 0, :, :, :2].transpose(0, 2, 1)
+diff = np.linalg.norm(pred_xy - gt_xy[None, ...], axis=1).mean(-1)
+min_ade = diff.min()
+print("minADE:", min_ade, "meters")
+```
+
+```python notebook_example.py
+import torch
+from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo_r1.load_physical_aiavdataset import load_physical_aiavdataset
+from alpamayo_r1 import helper
+
+# Load model
+model = AlpamayoR1.from_pretrained("nvidia/Alpamayo-R1-10B", dtype=torch.bfloat16).to("cuda")
+processor = helper.get_processor(model.tokenizer)
+
+# Load data
+clip_id = "030c760c-ae38-49aa-9ad8-f5650a545d26"
+data = load_physical_aiavdataset(clip_id)
+
+# Prepare inputs
+messages = helper.create_message(data["image_frames"].flatten(0, 1))
+inputs = processor.apply_chat_template(
+    messages,
+    tokenize=True,
+    add_generation_prompt=False,
+    continue_final_message=True,
+    return_dict=True,
+    return_tensors="pt",
+)
+model_inputs = {
+    "tokenized_data": inputs,
+    "ego_history_xyz": data["ego_history_xyz"],
+    "ego_history_rot": data["ego_history_rot"],
+}
+model_inputs = helper.to_device(model_inputs, "cuda")
+
+# Inference
+torch.cuda.manual_seed_all(42)
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    pred_xyz, pred_rot, extra = model.sample_trajectories_from_data_with_vlm_rollout(
+        data=model_inputs,
+        top_p=0.98,
+        temperature=0.6,
+        num_traj_samples=1,
+        max_generation_length=256,
+        return_extra=True,
+    )
+
+print("Chain-of-Causation:\n", extra["cot"][0])
+```
+
+</CodeGroup>
+
+## Understanding the outputs
+
+Alpamayo 1 produces two key outputs:
+
+### Trajectory predictions
+
+- **Format**: `pred_xyz` with shape `[batch_size, num_traj_sets, num_traj_samples, 64, 3]`
+- **Content**: 64 waypoints representing 6.4 seconds of predicted vehicle motion (10 Hz)
+- **Coordinates**: XYZ positions in the ego vehicle's coordinate frame
+
+### Chain-of-Causation reasoning
+
+- **Format**: Natural language text in `extra["cot"]`
+- **Content**: Explanations of the causal factors influencing the predicted trajectory
+- **Example**: "The vehicle ahead is slowing down due to traffic. I should reduce speed and maintain safe following distance."
+
+## Interactive notebook
+
+For visual exploration and trajectory visualization, use the included Jupyter notebook:
+
+```bash
+jupyter notebook notebooks/inference.ipynb
+```
+
+The notebook includes:
+- Multi-camera image visualization
+- Trajectory plotting (predicted vs. ground truth)
+- Interactive parameter tuning
+- Matplotlib-based visualizations
+
+## Inference parameters
+
+You can customize inference behavior with these parameters:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `top_p` | 0.98 | Nucleus sampling threshold for token generation |
+| `temperature` | 0.6 | Sampling temperature (higher = more diverse) |
+| `num_traj_samples` | 1 | Number of trajectory samples to generate |
+| `max_generation_length` | 256 | Maximum length for reasoning text generation |
+
+<Warning>
+  Increasing `num_traj_samples` generates multiple trajectory hypotheses but significantly increases GPU memory usage. Start with 1 and increase gradually.
+</Warning>
+
+## Expected variability
+
+Vision-Language-Action models produce non-deterministic outputs due to:
+
+- Trajectory sampling during inference
+- Hardware differences across GPUs
+- Floating-point precision variations
+
+With `num_traj_samples=1`, you may observe variance in minADE metrics across runs. This is expected behavior. For more stable evaluation, increase `num_traj_samples` or use the interactive notebook for visual sanity checks.
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Model architecture" icon="brain">
+    Learn about the Vision-Language-Action architecture and Chain-of-Causation reasoning
+  </Card>
+  <Card title="HuggingFace model card" icon="book" href="https://huggingface.co/nvidia/Alpamayo-R1-10B">
+    Read comprehensive details on inputs, outputs, and licensing
+  </Card>
+  <Card title="Research paper" icon="file-lines" href="https://arxiv.org/abs/2511.00088">
+    Explore the technical details in the arXiv paper
+  </Card>
+  <Card title="Dataset" icon="database" href="https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles">
+    Browse the PhysicalAI-AV dataset on HuggingFace
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
